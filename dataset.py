@@ -41,7 +41,22 @@ class PygGraphPropPredDataset(InMemoryDataset):
         return ['data.pt']
 
     def dataset_split(self):
-        pass
+        assert self.train_ratio + self.val_ratio <= 1.0, "Error split ratios!"
+        dataset.shuffle()
+        train_idx = []
+        valid_idx = []
+        test_idx = []
+        train_size = int(dataset.len() * self.train_ratio)
+        val_size = int(dataset.len() * self.val_ratio)
+        test_size = int(dataset.len() * self.test_ratio)
+        for i in range(train_size):
+            train_idx.append(i)
+        for i in range(train_size, train_size + val_size):
+            valid_idx.append(i)
+        for i in range(train_size + val_size, dataset.len()):
+            test_idx.append(i)
+        return {'train': torch.tensor(train_idx, dtype=torch.long), 'valid': torch.tensor(valid_idx, dtype=torch.long),
+                'test': torch.tensor(test_idx, dtype=torch.long)}
 
     def process(self):
         # Read data into huge `Data` list.
@@ -53,15 +68,15 @@ class PygGraphPropPredDataset(InMemoryDataset):
             for (root1, dirs1, files1), (root2, dirs2, files2) in zip(os.walk(folder1_path), os.walk(folder2_path)):
                 # Iterate over files in both folders simultaneously
                 for file1, file2 in zip(files1, files2):
-                    queryset = pd.read_csv(osp.join(root1,file1), header=None, skiprows=4, delimiter=" ")
-                    edge_index = torch.from_numpy(queryset.iloc[:, 1:3].values)
+                    queryset = pd.read_csv(osp.join(root1, file1), header=None, skiprows=4, delimiter=" ")
+                    edge_index = torch.from_numpy(queryset.iloc[:, 1:3].values.reshape(2, -1))
                     edge_attr = torch.from_numpy(queryset.iloc[:, -1].values.reshape(-1, 1))
 
-                    label = pd.read_csv(osp.join(root2,file2), header=None, delimiter=" ")
+                    label = pd.read_csv(osp.join(root2, file2), header=None, delimiter=" ")
                     mean = torch.from_numpy(label[0].values.reshape(-1, 1))
                     var = torch.from_numpy(label[1].values.reshape(-1, 1))
 
-                    g = Data(edge_index, edge_attr=edge_attr, mean=mean, var=var)
+                    g = Data(edge_index=edge_index, edge_attr=edge_attr, mean=mean, var=var)
                     datalist.append(g)
                 # Recurse into subfolders
                 for subfolder1, subfolder2 in zip(dirs1, dirs2):
@@ -69,10 +84,9 @@ class PygGraphPropPredDataset(InMemoryDataset):
 
         iterate_folders(querysets, labels)
 
-        data, slice = self.collate(datalist)
-        torch.save((data, slice), self.processed_paths[0])
+        data, slices = self.collate(datalist)
+        torch.save((data, slices), self.processed_paths[0])
 
 
 if __name__ == "__main__":
     dataset = PygGraphPropPredDataset()
-    print(dataset[0])
