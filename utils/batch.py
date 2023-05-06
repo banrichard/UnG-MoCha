@@ -1,7 +1,6 @@
 import torch
 import torch_geometric
 from torch_geometric.data import Data
-import pdb
 
 # This is a copy from torch_geometric/data/batch.py
 # which is modified to support batch asignment in subgraph level

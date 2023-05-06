@@ -6,6 +6,7 @@ from torch_geometric.utils import to_scipy_sparse_matrix
 from collections import defaultdict
 import scipy.sparse as ssp
 import numpy as np
+from batch import Batch
 
 
 def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
@@ -20,7 +21,6 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
     assert (isinstance(data, Data))
     # TODO: modify the data obtaining
     x, edge_index, num_nodes = data.x, data.edge_index, data.num_nodes
-
     new_data_multi_hop = {}
     # traverse the h-hop neighbors
     for h_ in h:
@@ -50,33 +50,9 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
 
             if 'node_type' in data:
                 data_.node_type = node_type_
-            # if use_rd:
-            #     # See "Link prediction in complex networks: A survey".
-            #     adj = to_scipy_sparse_matrix(
-            #         edge_index_, num_nodes=nodes_.shape[0]
-            #     ).tocsr()
-            #     laplacian = ssp.csgraph.laplacian(adj).toarray()
-            #     try:
-            #         L_inv = linalg.pinv(laplacian)
-            #     except:
-            #         laplacian += 0.01 * np.eye(*laplacian.shape)
-            #     lxx = L_inv[0, 0]
-            #     lyy = L_inv[list(range(len(L_inv))), list(range(len(L_inv)))]
-            #     lxy = L_inv[0, :]
-            #     lyx = L_inv[:, 0]
-            #     rd_to_x = torch.FloatTensor((lxx + lyy - lxy - lyx)).unsqueeze(1)
-            #     data_.rd = rd_to_x
 
             if subgraph_pretransform is not None:  # for k-gnn
                 data_ = subgraph_pretransform(data_)
-                # if 'assignment_index_2' in data_:
-                #     data_.batch_2 = torch.zeros(
-                #         data_.iso_type_2.shape[0], dtype=torch.long
-                #     )
-                # if 'assignment_index_3' in data_:
-                #     data_.batch_3 = torch.zeros(
-                #         data_.iso_type_3.shape[0], dtype=torch.long
-                #     )
 
             subgraphs.append(data_)
 
@@ -92,12 +68,12 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
         # rename batch, because batch will be used to store node_to_graph assignment
         new_data.node_to_subgraph = new_data.batch
         del new_data.batch
-        if 'batch_2' in new_data:
-            new_data.assignment2_to_subgraph = new_data.batch_2
-            del new_data.batch_2
-        if 'batch_3' in new_data:
-            new_data.assignment3_to_subgraph = new_data.batch_3
-            del new_data.batch_3
+        # if 'batch_2' in new_data:
+        #     new_data.assignment2_to_subgraph = new_data.batch_2
+        #     del new_data.batch_2
+        # if 'batch_3' in new_data:
+        #     new_data.assignment3_to_subgraph = new_data.batch_3
+        #     del new_data.batch_3
 
         # create a subgraph_to_graph assignment vector (all zero)
         new_data.subgraph_to_graph = torch.zeros(len(subgraphs), dtype=torch.long)
@@ -173,31 +149,6 @@ def k_hop_subgraph(node_idx, num_hops, edge_index, relabel_nodes=False,
         hop = hop[hop != 0]
         hop = torch.cat([torch.LongTensor([0], device=row.device), hop])
         z = hop.unsqueeze(1)
-    # elif node_label.startswith('spd') or node_label == 'drnl':
-    #     if node_label.startswith('spd'):
-    #         # keep top k shortest-path distances
-    #         num_spd = int(node_label[3:]) if len(node_label) > 3 else 2
-    #         z = torch.zeros(
-    #             [subset.size(0), num_spd], dtype=torch.long, device=row.device
-    #         )
-    #     elif node_label == 'drnl':
-    #         # see "Link Prediction Based on Graph Neural Networks", a special
-    #         # case of spd2
-    #         num_spd = 2
-    #         z = torch.zeros([subset.size(0), 1], dtype=torch.long, device=row.device)
-    #
-    #     for i, node in enumerate(subset.tolist()):
-    #         dists = label[node][:num_spd]  # keep top num_spd distances
-    #         if node_label == 'spd':
-    #             z[i][:min(num_spd, len(dists))] = torch.tensor(dists)
-    #         elif node_label == 'drnl':
-    #             dist1 = dists[0]
-    #             dist2 = dists[1] if len(dists) == 2 else 0
-    #             if dist2 == 0:
-    #                 dist = dist1
-    #             else:
-    #                 dist = dist1 * (num_hops + 1) + dist2
-    #             z[i][0] = dist
 
     node_mask.fill_(False)
     node_mask[subset] = True
