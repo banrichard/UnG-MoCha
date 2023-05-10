@@ -3,7 +3,9 @@ import torch
 import pandas as pd
 
 from torch_geometric.data import InMemoryDataset, Data
-from utils.utils import k_hop_random_walk
+
+from model.topK import SimpleTopK
+from utils.utils import k_hop_random_walk, nodes_to_subgraphs, subgraph_padding
 
 
 class Converter(InMemoryDataset):
@@ -46,11 +48,22 @@ class Converter(InMemoryDataset):
         edge_index = torch.from_numpy(edge_index)
         edge_attr = torch.from_numpy(edge_attr)
         graph = Data(edge_index=edge_index, edge_attr=edge_attr, num_nodes=num_nodes)
+        sets = k_hop_random_walk(graph)
+        for set in sets:
+            subgraphs,mask_tensor = subgraph_padding(set)
+
+        graph.sets = sets
         data, slices = self.collate([graph])
         torch.save((data, slices), self.processed_paths[0])
 
 
 if __name__ == "__main__":
     graph = Converter()
-    sets = k_hop_random_walk(graph)
 
+    # subgraphs,mask_tensor = subgraph_padding(graph[0].sets[0])
+    # print(subgraphs)
+    # sets = k_hop_random_walk(graph)
+    # new_datas= nodes_to_subgraphs(graph[0])
+    # topk = SimpleTopK(graph[0].sets[0])
+    # tmp = topk.top_k_subgraphs(topk.candidate_set)
+    # print(tmp)

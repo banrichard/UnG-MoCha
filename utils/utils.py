@@ -9,9 +9,32 @@ from collections import defaultdict
 import scipy.sparse as ssp
 import numpy as np
 import networkx as nx
+from .batch import Batch
 
 
-# from batch import Batch
+def nodes_to_subgraphs(data):
+    edge_index = None
+    edge_attr = None
+
+    if data.edge_index is not None:
+        edge_index = data.edge_index
+    if data.edge_attr is not None:
+        edge_attr = data.edge_attr
+
+    candidate_sets = k_hop_random_walk()
+    # get each node's subgraph representation
+    new_datas = []
+    for key in candidate_sets:
+        new_data = Batch.from_data_list(candidate_sets[key])
+        # the first solution to decide the nodes
+        new_data.num_subgraphs = len(candidate_sets[key])
+        new_data.node_to_subgraph = new_data.batch
+        del new_data.batch
+
+        # create a subgraph_to_graph assignment vector (all zero)
+        new_data.subgraph_to_graph = torch.zeros(len(candidate_sets[key]), dtype=torch.long)
+        new_datas.append(new_data)
+    return new_datas
 
 
 def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
@@ -31,10 +54,7 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
     for h_ in h:
         subgraphs = []
         for ind in range(num_nodes):
-            nodes_, edge_index_, edge_mask_, z_ = k_hop_subgraph(
-                ind, h_, edge_index, True, num_nodes, node_label=node_label,
-                max_nodes_per_hop=max_nodes_per_hop
-            )
+            nodes_, edge_index_, edge_mask_, z_ = k_hop_random_walk()
             x_ = None
             edge_attr_ = None
             pos_ = None
@@ -158,11 +178,11 @@ def maybe_num_nodes(index, num_nodes=None):
     return index.max().item() + 1 if num_nodes is None else num_nodes
 
 
-def pygstyle2nx(data) -> nx.Graph:
+def pygstyle2nx(filepath) -> nx.Graph:
     nx_graph = nx.Graph()
     # print(nx_graph.number_of_edges())
     edges = []
-    graph_data = pd.read_csv("dataset/krogan/krogan_core.txt", header=None, skiprows=1, delimiter=" ")
+    graph_data = pd.read_csv(filepath, header=None, skiprows=1, delimiter=" ")
     for i in range(len(graph_data)):
         edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'prob': graph_data.iloc[i, 2]}))
 
@@ -207,8 +227,8 @@ def induced_subgraph(graph, src, neighbors, k=1):
     return subgraph.copy()
 
 
-def k_hop_random_walk(dataset, hop=1, walks=10, subs=5):
-    graph = pygstyle2nx(dataset[0])
+def k_hop_random_walk(hop=1, walks=10, subs=5):
+    graph = pygstyle2nx("dataset/krogan/krogan_core.txt")
     # Set random seed
     torch.manual_seed(1234)
     candidate_sets = {}
@@ -237,18 +257,6 @@ def k_hop_random_walk(dataset, hop=1, walks=10, subs=5):
             edge_index = torch.tensor(list(subgraph.edges)).T.contiguous()
             x = torch.tensor(np.eye(subgraph.number_of_nodes()))
 
-            # subgraph = nx.subgraph_view(subgraph, filter_node=filter_nodes, filter_edge=filter_edges)
-            # for neighbor in neighbors:
-            #     if graph[node][neighbor]['prob'] >= random.random():
-            #         subgraph_edges.append((node, neighbor, graph[node][neighbor]['prob']))
-            #         subgraph_prob *= graph[node][neighbor]['prob']
-            # adj = nx.to_scipy_sparse_array(subgraph).tocoo()
-            # row = torch.from_numpy(adj.row.astype(np.int64)).to(torch.long)
-            # col = torch.from_numpy(adj.col.astype(np.int64)).to(torch.long)
-            # edge_index = np.empty((2, subgraph.number_of_edges()))
-            # for i in range(len(row) - 1):
-            #     for j in range(i + 1, len(col) - 1):
-            #         edge_index[i, j] =
             edge_attr = []
             for (u, v) in subgraph.edges:
                 edge_attr.append(subgraph.edges[u, v])
@@ -258,7 +266,42 @@ def k_hop_random_walk(dataset, hop=1, walks=10, subs=5):
             subgraphs.append(subgraph)
 
         candidate_sets[node] = subgraphs
+
     return candidate_sets
+
+
+def subgraph_padding(candidate_set):
+    max_nodes = max([subgraph.num_nodes for subgraph in candidate_set])
+    max_edges = max([subgraph.num_edges for subgraph in candidate_set])
+    padded_subgraphs = []
+    masks = []
+
+    for key in candidate_set:
+        mask, padded_subgraph = subgraph_process(max_edges, max_nodes, key)
+        padded_subgraphs.append(padded_subgraph)
+        masks.append(mask)
+
+    # Create a batch from padded subgraphs
+    # batch = Batch.from_data_list(padded_subgraphs)
+
+    # Stack the masks into a tensor
+    mask_tensor = torch.stack(masks)
+    return padded_subgraphs, mask_tensor
+
+def subgraph_process(max_edges, max_nodes, subgraph):
+    num_nodes_to_pad = max_nodes - subgraph.num_nodes
+    num_edges_to_pad = max_edges - subgraph.num_edges
+    # Pad node features, edge indices, and edge attributes
+    padded_x = torch.cat([subgraph.x, torch.zeros((num_nodes_to_pad, subgraph.x.shape[1]))], dim=0)
+    padded_edge_index = torch.cat([subgraph.edge_index,
+                                   torch.zeros((2, num_edges_to_pad), dtype=torch.long)], dim=1)
+    padded_edge_attr = torch.cat([subgraph.edge_attr,
+                                  torch.zeros((num_edges_to_pad, subgraph.edge_attr.shape[1]))], dim=0)
+    # Create mask
+    mask = torch.cat([torch.ones(subgraph.num_nodes, dtype=torch.uint8),
+                      torch.zeros(num_nodes_to_pad, dtype=torch.uint8)], dim=0)
+    padded_subgraph = Data(x=padded_x, edge_index=padded_edge_index, edge_attr=padded_edge_attr)
+    return mask, padded_subgraph
 
 
 def neighbors(fringe, A):

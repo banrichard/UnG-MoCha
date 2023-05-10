@@ -43,6 +43,9 @@ class Batch(Data):
 
         cumsum = {key: 0 for key in keys}
         batch.batch = []
+        sizes = [len(subgraph.x) for subgraph in data_list]
+        # data_list = [subgraph for _, subgraph in sorted(zip(sizes, data_list), reverse=True)]
+        sizes.sort(reverse=True)
         for i, data in enumerate(data_list):
             for key in data.keys:
                 item = data[key]
@@ -184,3 +187,9 @@ class Batch(Data):
     def num_graphs(self):
         """Returns the number of graphs in the batch."""
         return self.batch[-1].item() + 1
+
+    def padding(self,data_list):
+        max_len = max([data.edge_index.size(1) for data in data_list])
+        for (i,data) in enumerate(data_list):
+            if data.edge_index.size(1) < max_len:
+                data.x.expand(data.num_nodes,max_len)
