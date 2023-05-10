@@ -1,12 +1,17 @@
+import queue
 import random
 
+import pandas as pd
 import torch
 from torch_geometric.data import Data
-from torch_geometric.utils import to_scipy_sparse_matrix
+from torch_geometric.utils import to_scipy_sparse_matrix, to_networkx
 from collections import defaultdict
 import scipy.sparse as ssp
 import numpy as np
-from batch import Batch
+import networkx as nx
+
+
+# from batch import Batch
 
 
 def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
@@ -20,7 +25,7 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
         h = [h]
     assert (isinstance(data, Data))
     # TODO: modify the data obtaining
-    x, edge_index, num_nodes = data.x, data.edge_index, data.num_nodes
+    edge_index, num_nodes = data.edge_index, data.num_nodes
     new_data_multi_hop = {}
     # traverse the h-hop neighbors
     for h_ in h:
@@ -33,10 +38,6 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
             x_ = None
             edge_attr_ = None
             pos_ = None
-            if x is not None:
-                x_ = x[nodes_]
-            else:
-                x_ = None
 
             if 'node_type' in data:
                 node_type_ = data.node_type[nodes_]
@@ -68,12 +69,6 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
         # rename batch, because batch will be used to store node_to_graph assignment
         new_data.node_to_subgraph = new_data.batch
         del new_data.batch
-        # if 'batch_2' in new_data:
-        #     new_data.assignment2_to_subgraph = new_data.batch_2
-        #     del new_data.batch_2
-        # if 'batch_3' in new_data:
-        #     new_data.assignment3_to_subgraph = new_data.batch_3
-        #     del new_data.batch_3
 
         # create a subgraph_to_graph assignment vector (all zero)
         new_data.subgraph_to_graph = torch.zeros(len(subgraphs), dtype=torch.long)
@@ -97,12 +92,7 @@ def k_hop_subgraph(node_idx, num_hops, edge_index, relabel_nodes=False,
                    num_nodes=None, flow='source_to_target', node_label='hop',
                    max_nodes_per_hop=None):
     num_nodes = maybe_num_nodes(edge_index, num_nodes)
-
-    assert flow in ['source_to_target', 'target_to_source']
-    if flow == 'target_to_source':
-        row, col = edge_index
-    else:
-        col, row = edge_index
+    col, row = edge_index
 
     node_mask = row.new_empty(num_nodes, dtype=torch.bool)
     edge_mask = row.new_empty(row.size(0), dtype=torch.bool)
@@ -166,6 +156,109 @@ def k_hop_subgraph(node_idx, num_hops, edge_index, relabel_nodes=False,
 
 def maybe_num_nodes(index, num_nodes=None):
     return index.max().item() + 1 if num_nodes is None else num_nodes
+
+
+def pygstyle2nx(data) -> nx.Graph:
+    nx_graph = nx.Graph()
+    # print(nx_graph.number_of_edges())
+    edges = []
+    graph_data = pd.read_csv("dataset/krogan/krogan_core.txt", header=None, skiprows=1, delimiter=" ")
+    for i in range(len(graph_data)):
+        edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'prob': graph_data.iloc[i, 2]}))
+
+    nx_graph.add_edges_from(edges)
+    return nx_graph
+
+
+def induced_subgraph(graph, src, neighbors, k=1):
+    nodes_list = [src]
+    Q = queue.Queue()
+    Q.put(src)
+    depth = 0
+    while not Q.empty():
+        s = Q.qsize()
+        for _ in range(s):
+            cur = Q.get()
+            for next in graph.neighbors(cur):
+                if next in nodes_list:
+                    continue
+                Q.put(next)
+                nodes_list.append(next)
+        depth += 1
+        if depth >= k:
+            break
+    subgraph = nx.subgraph(graph, nodes_list).copy()
+    # filter the nodes and edges
+    remove_node_list = []
+    for node in subgraph.nodes():
+        if node not in neighbors:
+            remove_node_list.append(node)
+    subgraph.remove_nodes_from(remove_node_list)
+
+    remove_edge_list = []
+    for (u, v) in subgraph.edges():
+        if subgraph.edges[u, v]['prob'] < random.random() and (
+                u not in subgraph.neighbors(src) or v not in subgraph.neighbors(src)):
+            remove_edge_list.append((u, v))
+    # refine the subgraph and remove the edges that can't form a connected subgraph with the root node.
+    subgraph.remove_edges_from(remove_edge_list)
+    # largest_cp = max(nx.connected_components(subgraph))
+
+    return subgraph.copy()
+
+
+def k_hop_random_walk(dataset, hop=1, walks=10, subs=5):
+    graph = pygstyle2nx(dataset[0])
+    # Set random seed
+    torch.manual_seed(1234)
+    candidate_sets = {}
+    # Generate 1-hop subgraphs using random walk
+
+    for node in graph.nodes:
+        subgraphs = []
+        for sub in range(subs):
+            # Start random walk from node
+            node_idx = torch.tensor([node])
+            walk = [node]
+            for i in range(walks):  # 10 steps of random walk
+                neighbors = list(graph.neighbors(node))
+                if len(neighbors) == 0:
+                    break
+                next_node = torch.tensor([neighbors[torch.randint(len(neighbors), size=(1,))]])
+                walk.append(next_node.item())
+
+            # Convert random walk to subgraph
+            subgraph_nodes = set(walk)
+
+            neighbors = subgraph_nodes.copy()
+            neighbors.remove(node)
+
+            subgraph = induced_subgraph(graph, node, subgraph_nodes)
+            edge_index = torch.tensor(list(subgraph.edges)).T.contiguous()
+            x = torch.tensor(np.eye(subgraph.number_of_nodes()))
+
+            # subgraph = nx.subgraph_view(subgraph, filter_node=filter_nodes, filter_edge=filter_edges)
+            # for neighbor in neighbors:
+            #     if graph[node][neighbor]['prob'] >= random.random():
+            #         subgraph_edges.append((node, neighbor, graph[node][neighbor]['prob']))
+            #         subgraph_prob *= graph[node][neighbor]['prob']
+            # adj = nx.to_scipy_sparse_array(subgraph).tocoo()
+            # row = torch.from_numpy(adj.row.astype(np.int64)).to(torch.long)
+            # col = torch.from_numpy(adj.col.astype(np.int64)).to(torch.long)
+            # edge_index = np.empty((2, subgraph.number_of_edges()))
+            # for i in range(len(row) - 1):
+            #     for j in range(i + 1, len(col) - 1):
+            #         edge_index[i, j] =
+            edge_attr = []
+            for (u, v) in subgraph.edges:
+                edge_attr.append(subgraph.edges[u, v])
+            edge_attr = [x['prob'] for x in edge_attr]
+            edge_attr = torch.Tensor(edge_attr).reshape(-1, 1).to(torch.float64)
+            subgraph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+            subgraphs.append(subgraph)
+
+        candidate_sets[node] = subgraphs
+    return candidate_sets
 
 
 def neighbors(fringe, A):

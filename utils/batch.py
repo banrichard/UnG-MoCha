@@ -3,7 +3,7 @@ import torch_geometric
 from torch_geometric.data import Data
 
 # This is a copy from torch_geometric/data/batch.py
-# which is modified to support batch asignment in subgraph level
+# which is modified to support batch assignment in subgraph level
 
 class Batch(Data):
     r"""A plain old python object modeling a batch of graphs as one big
@@ -42,10 +42,6 @@ class Batch(Data):
             batch['{}_batch'.format(key)] = []
 
         cumsum = {key: 0 for key in keys}
-        if 'assignment_index_2' in keys:
-            cumsum['assignment_index_2'] = torch.LongTensor([[0], [0]])
-        if 'assignment_index_3' in keys:
-            cumsum['assignment_index_3'] = torch.LongTensor([[0], [0]])
         batch.batch = []
         for i, data in enumerate(data_list):
             for key in data.keys:
