@@ -61,7 +61,7 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
 
             # nodes_ = torch.tensor(list(node_set))
             edge_attr_ = data.edge_attr[edge_mask_]
-            data_ = Data.__class__(edge_index=edge_index_, edge_attr=edge_attr_)
+            data_ = Data(edge_index=edge_index_, edge_attr=edge_attr_)
             subgraphs.append(data_)
 
         # new_data is treated as a big disconnected graph of the batch of subgraphs
@@ -360,6 +360,8 @@ def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
             if walk > walks:
                 break
             next_node = random.sample(new_nodes.tolist(),1)
+            if edge_attr[edge_index[[subsets[0],next_node]]] < random.random():
+                continue
             tmp.append(next_node[0])
             walk += 1
 
@@ -384,6 +386,7 @@ def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
 
     node_mask.fill_(False)
     node_mask[subset] = True
+
     edge_mask = node_mask[row] & node_mask[col]
 
     edge_index = edge_index[:, edge_mask]
