@@ -47,8 +47,8 @@ class SimpleTopK():
 
     def euclidean_distance(self, subgraph1, subgraph2):
         # Extract the 'prob' attribute from the edges of both subgraphs
-        prob1 = subgraph1.edge_attr[:, 0]  # Assuming 'prob' is the first attribute
-        prob2 = subgraph2.edge_attr[:, 0]
+        prob1 = subgraph1.edge_attr  # Assuming 'prob' is the first attribute
+        prob2 = subgraph2.edge_attr
 
         # Compute the Euclidean distance between the edge probabilities
         distance = torch.norm(prob1 - prob2, p=2)  # Euclidean distance (L2 norm)

@@ -43,9 +43,9 @@ class Batch(Data):
 
         cumsum = {key: 0 for key in keys}
         batch.batch = []
-        sizes = [len(subgraph.x) for subgraph in data_list]
+        # sizes = [len(subgraph.x) for subgraph in data_list]
         # data_list = [subgraph for _, subgraph in sorted(zip(sizes, data_list), reverse=True)]
-        sizes.sort(reverse=True)
+        # sizes.sort(reverse=True)
         for i, data in enumerate(data_list):
             for key in data.keys:
                 item = data[key]

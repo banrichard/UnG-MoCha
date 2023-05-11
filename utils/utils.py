@@ -13,28 +13,26 @@ from .batch import Batch
 
 
 def nodes_to_subgraphs(data):
-    edge_index = None
-    edge_attr = None
+    edge_index = data.edge_index
+    edge_attr = data.edge_attr
 
-    if data.edge_index is not None:
-        edge_index = data.edge_index
-    if data.edge_attr is not None:
-        edge_attr = data.edge_attr
-
-    candidate_sets = k_hop_random_walk()
+    candidate_sets = data.sets
+    subgraphs = []
+    for k in candidate_sets.keys():
+        subgraphs.append(candidate_sets[k])
     # get each node's subgraph representation
-    new_datas = []
-    for key in candidate_sets:
-        new_data = Batch.from_data_list(candidate_sets[key])
-        # the first solution to decide the nodes
-        new_data.num_subgraphs = len(candidate_sets[key])
-        new_data.node_to_subgraph = new_data.batch
-        del new_data.batch
-
+    new_data = Batch.from_data_list(subgraphs)
         # create a subgraph_to_graph assignment vector (all zero)
-        new_data.subgraph_to_graph = torch.zeros(len(candidate_sets[key]), dtype=torch.long)
-        new_datas.append(new_data)
-    return new_datas
+    new_data.num_subgraphs = len(subgraphs)
+
+    new_data.original_edge_index = data.edge_index
+    new_data.original_edge_attr = data.edge_attr
+    # rename batch, because batch will be used to store node_to_graph assignment
+    new_data.node_to_subgraph = new_data.batch
+    del new_data.batch
+    new_data.subgraph_to_graph = torch.zeros(len(subgraphs), dtype=torch.long)
+        # new_datas.append(new_data)
+    return new_data
 
 
 def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
@@ -48,37 +46,27 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
         h = [h]
     assert (isinstance(data, Data))
     # TODO: modify the data obtaining
-    edge_index, num_nodes = data.edge_index, data.num_nodes
+    edge_index, num_nodes, edge_attr = data.edge_index, data.num_nodes, data.edge_attr
     new_data_multi_hop = {}
     # traverse the h-hop neighbors
     for h_ in h:
         subgraphs = []
         for ind in range(num_nodes):
-            nodes_, edge_index_, edge_mask_, z_ = k_hop_random_walk()
-            x_ = None
-            edge_attr_ = None
-            pos_ = None
+            nodes_, edge_index_, edge_mask_ = new_k_hop_rw(ind,h_,edge_index,edge_attr,subs=1)
+            # node_set = set()
+            # subgraph_edge_index = candidate_set.edge_index
+            # for i in range(len(subgraph_edge_index)):
+            #     for j in range(len(subgraph_edge_index[0])):
+            #         node_set.add(subgraph_edge_index[i][j])
 
-            if 'node_type' in data:
-                node_type_ = data.node_type[nodes_]
-
-            if data.edge_attr is not None:
-                edge_attr_ = data.edge_attr[edge_mask_]
-            if data.pos is not None:
-                pos_ = data.pos[nodes_]
-            data_ = data.__class__(x_, edge_index_, edge_attr_, None, pos_, z=z_)
-            data_.num_nodes = nodes_.shape[0]
-
-            if 'node_type' in data:
-                data_.node_type = node_type_
-
-            if subgraph_pretransform is not None:  # for k-gnn
-                data_ = subgraph_pretransform(data_)
-
+            # nodes_ = torch.tensor(list(node_set))
+            edge_attr_ = data.edge_attr[edge_mask_]
+            data_ = Data.__class__(edge_index=edge_index_, edge_attr=edge_attr_)
             subgraphs.append(data_)
 
         # new_data is treated as a big disconnected graph of the batch of subgraphs
         new_data = Batch.from_data_list(subgraphs)
+        # the sum of nodes in each subgraph
         new_data.num_nodes = sum(data_.num_nodes for data_ in subgraphs)
         new_data.num_subgraphs = len(subgraphs)
 
@@ -89,7 +77,6 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
         # rename batch, because batch will be used to store node_to_graph assignment
         new_data.node_to_subgraph = new_data.batch
         del new_data.batch
-
         # create a subgraph_to_graph assignment vector (all zero)
         new_data.subgraph_to_graph = torch.zeros(len(subgraphs), dtype=torch.long)
 
@@ -254,18 +241,18 @@ def k_hop_random_walk(hop=1, walks=10, subs=5):
             neighbors.remove(node)
 
             subgraph = induced_subgraph(graph, node, subgraph_nodes)
+
             edge_index = torch.tensor(list(subgraph.edges)).T.contiguous()
-            x = torch.tensor(np.eye(subgraph.number_of_nodes()))
 
             edge_attr = []
             for (u, v) in subgraph.edges:
                 edge_attr.append(subgraph.edges[u, v])
             edge_attr = [x['prob'] for x in edge_attr]
             edge_attr = torch.Tensor(edge_attr).reshape(-1, 1).to(torch.float64)
-            subgraph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+            subgraph = Data(edge_index=edge_index, edge_attr=edge_attr)
             subgraphs.append(subgraph)
 
-        candidate_sets[node] = subgraphs
+        candidate_sets[node] = subgraphs[0]
 
     return candidate_sets
 
@@ -287,6 +274,7 @@ def subgraph_padding(candidate_set):
     # Stack the masks into a tensor
     mask_tensor = torch.stack(masks)
     return padded_subgraphs, mask_tensor
+
 
 def subgraph_process(max_edges, max_nodes, subgraph):
     num_nodes_to_pad = max_nodes - subgraph.num_nodes
@@ -345,3 +333,59 @@ class return_prob(object):
         data.rp = torch.FloatTensor(rp)
 
         return data
+
+
+def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
+                   num_nodes=None,
+                   max_nodes_per_hop=None,walks=10, subs=5):
+    num_nodes = maybe_num_nodes(edge_index, num_nodes)
+    row, col = edge_index
+    node_mask = row.new_empty(num_nodes, dtype=torch.bool)
+    edge_mask = row.new_empty(row.size(0), dtype=torch.bool)
+
+    subsets = [torch.tensor([node_idx], device=row.device).flatten()]
+    visited = set(subsets[-1].tolist())
+
+    label = defaultdict(list)
+    for node in subsets[-1].tolist():
+        label[node].append(1)
+    for h in range(num_hops):
+        node_mask.fill_(False)
+        node_mask[subsets[-1]] = True
+        torch.index_select(node_mask, 0, row, out=edge_mask)
+        new_nodes = col[edge_mask] # select the neighbors
+        tmp = []
+        walk = 0
+        for walk in range(walks):
+            if walk > walks:
+                break
+            next_node = random.sample(new_nodes.tolist(),1)
+            tmp.append(next_node[0])
+            walk += 1
+
+        # for node in new_nodes.tolist(): # travese the neighbors
+        #     if node in visited:
+        #         continue
+        #     tmp.append(node)
+        #     label[node].append(h + 2)
+        if len(tmp) == 0:
+            break
+        if max_nodes_per_hop is not None:
+            if max_nodes_per_hop < len(tmp):
+                tmp = random.sample(tmp, max_nodes_per_hop)
+        new_nodes = set(tmp)
+        visited = visited.union(new_nodes)
+        new_nodes = torch.tensor(list(new_nodes), device=row.device)
+        subsets.append(new_nodes)
+    subset = torch.cat(subsets)
+    # Add `node_idx` to the beginning of `subset`.
+    subset = subset[subset != node_idx]
+    subset = torch.cat([torch.tensor([node_idx], device=row.device), subset])
+
+    node_mask.fill_(False)
+    node_mask[subset] = True
+    edge_mask = node_mask[row] & node_mask[col]
+
+    edge_index = edge_index[:, edge_mask]
+
+    return subset, edge_index, edge_mask
