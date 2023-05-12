@@ -22,7 +22,7 @@ def nodes_to_subgraphs(data):
         subgraphs.append(candidate_sets[k])
     # get each node's subgraph representation
     new_data = Batch.from_data_list(subgraphs)
-        # create a subgraph_to_graph assignment vector (all zero)
+    # create a subgraph_to_graph assignment vector (all zero)
     new_data.num_subgraphs = len(subgraphs)
 
     new_data.original_edge_index = data.edge_index
@@ -31,7 +31,7 @@ def nodes_to_subgraphs(data):
     new_data.node_to_subgraph = new_data.batch
     del new_data.batch
     new_data.subgraph_to_graph = torch.zeros(len(subgraphs), dtype=torch.long)
-        # new_datas.append(new_data)
+    # new_datas.append(new_data)
     return new_data
 
 
@@ -52,7 +52,7 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
     for h_ in h:
         subgraphs = []
         for ind in range(num_nodes):
-            nodes_, edge_index_, edge_mask_ = new_k_hop_rw(ind,h_,edge_index,edge_attr,subs=1)
+            nodes_, edge_index_, edge_mask_ = new_k_hop_rw(ind, h_, edge_index, edge_attr, subs=1)
             # node_set = set()
             # subgraph_edge_index = candidate_set.edge_index
             # for i in range(len(subgraph_edge_index)):
@@ -336,11 +336,12 @@ class return_prob(object):
 
 
 def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
-                   num_nodes=None,
-                   max_nodes_per_hop=None,walks=10, subs=5):
+                 num_nodes=None,
+                 max_nodes_per_hop=None, walks=10, subs=5):
     num_nodes = maybe_num_nodes(edge_index, num_nodes)
     row, col = edge_index
     node_mask = row.new_empty(num_nodes, dtype=torch.bool)
+    col_mask = col.new_empty(num_nodes, dtype=torch.bool)
     edge_mask = row.new_empty(row.size(0), dtype=torch.bool)
 
     subsets = [torch.tensor([node_idx], device=row.device).flatten()]
@@ -352,24 +353,38 @@ def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
     for h in range(num_hops):
         node_mask.fill_(False)
         node_mask[subsets[-1]] = True
+        col_mask.fill_(False)
+        col_mask[subsets[-1]] = True
         torch.index_select(node_mask, 0, row, out=edge_mask)
-        new_nodes = col[edge_mask] # select the neighbors
+
+        # select the neighbors from root node as the source node
+        new_nodes = col[edge_mask]
+
+        # select the neighbors from other nodes to root node
+        col_mask = torch.index_select(col_mask, 0, col)
+        edge_mask[[col_mask == True]] = True
+        new_nodes = torch.cat((new_nodes, row[edge_mask]))
+        new_nodes = new_nodes[~np.isin(new_nodes, subsets[0])]
         tmp = []
         walk = 0
         for walk in range(walks):
             if walk > walks:
                 break
-            next_node = random.sample(new_nodes.tolist(),1)
-            if edge_attr[edge_index[[subsets[0],next_node]]] < random.random():
+            next_node = new_nodes[random.randint(0, len(new_nodes) - 1)]
+            pos = edge_index.size(1) - 1
+            for i in range(edge_index.size(1)):
+                if edge_mask[i] == False:
+                    continue
+                if edge_index[:, i].equal(torch.Tensor([subsets[0], next_node]).int()) or edge_index[:, i].equal(
+                        torch.Tensor([next_node, subsets[0]]).int()):
+                    pos = i
+                    break
+                # edge_attr[edge_index[0] == subsets[0] and ]
+            if edge_attr[pos] < random.random():
                 continue
-            tmp.append(next_node[0])
+            tmp.append(int(next_node))
             walk += 1
 
-        # for node in new_nodes.tolist(): # travese the neighbors
-        #     if node in visited:
-        #         continue
-        #     tmp.append(node)
-        #     label[node].append(h + 2)
         if len(tmp) == 0:
             break
         if max_nodes_per_hop is not None:
