@@ -49,7 +49,8 @@ class Converter(InMemoryDataset):
         edge_index = torch.from_numpy(edge_index)
         edge_attr = torch.from_numpy(edge_attr)
         graph = Data(edge_index=edge_index, edge_attr=edge_attr, num_nodes=num_nodes)
-        data, slices = self.collate([graph])
+        new_data = create_subgraphs(graph)
+        data, slices = self.collate([new_data])
         torch.save((data, slices), self.processed_paths[0])
 
 
@@ -57,8 +58,8 @@ if __name__ == "__main__":
     graph = Converter()
     data = graph[0]
     # tmp = Batch.from_data_list(list(data))
-    new_data = create_subgraphs(data)
-    print(new_data.num_features)
+    # new_data = create_subgraphs(data)
+    # print(new_data.num_features)
     # new_data = create_subgraphs(data)
     # subgraphs,mask_tensor = subgraph_padding(graph[0].sets[0])
     # print(subgraphs)
