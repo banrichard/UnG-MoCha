@@ -8,51 +8,30 @@ class SimpleTopK():
     """
     This class is for HUGNN demo: to manually select one potential subgraph rooted at node n.
     """
+    def jaccard_distance(self,graph1, graph2):
+        set1 = set(graph1.edge_index.numpy().flatten())
+        set2 = set(graph2.edge_index.numpy().flatten())
 
-    def __init__(self, candidate_set, k=1):
-        self.candidate_set = candidate_set
-        self.k = k
-    def top_k_subgraphs(self, candidate_set):
-        k = self.k
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+
+        return 1.0 - intersection / union
+    def top_k_scores(self,batch, k):
+        num_graphs = batch.num_subgraphs
         scores = []
 
-        # Compute a score for each subgraph in the candidate set
-        for candidate in candidate_set:
-            # Perform some computation or scoring function on the candidate subgraph
-            score = self.compute_score(candidate, candidate_set)
-            scores.append(score)
+        for i in range(num_graphs):
+            for j in range(i + 1, num_graphs):
+                graph1 = batch[i]
+                graph2 = batch[j]
+                distance = self.jaccard_distance(graph1, graph2)
+                scores.append(distance)
 
-        # Sort the candidate subgraphs based on their scores
-        sorted_indices = torch.argsort(torch.tensor(scores), descending=True)
+        scores = torch.tensor(scores)
+        top_k_indices = scores.argsort()[:k]
+        top_k_scores = scores[top_k_indices]
 
-        # Select the top-k subgraphs
-        top_k_indices = sorted_indices[:k]
-
-        # Return the top-k subgraphs from the candidate set
-        top_k_subgraphs = [candidate_set[i] for i in top_k_indices]
-        return top_k_subgraphs
-
-    def compute_score(self, subgraph, candidate_set):
-        scores = []
-
-        # Compute the Euclidean distance for each subgraph in the candidate set
-        for candidate in candidate_set:
-            if candidate != subgraph:
-                score = self.euclidean_distance(subgraph, candidate)
-                scores.append(score)
-
-        # Return the average Euclidean distance as the subgraph's representation score
-        score = torch.mean(torch.tensor(scores))
-        return score
-
-    def euclidean_distance(self, subgraph1, subgraph2):
-        # Extract the 'prob' attribute from the edges of both subgraphs
-        prob1 = subgraph1.edge_attr  # Assuming 'prob' is the first attribute
-        prob2 = subgraph2.edge_attr
-
-        # Compute the Euclidean distance between the edge probabilities
-        distance = torch.norm(prob1 - prob2, p=2)  # Euclidean distance (L2 norm)
-        return distance
+        return top_k_scores
 
 
 class TopK(torch.nn.Module):
@@ -92,5 +71,4 @@ class TopK(torch.nn.Module):
 
     def __repr__(self):
         return self.__class__.__name__
-
 

@@ -165,7 +165,7 @@ def maybe_num_nodes(index, num_nodes=None):
     return index.max().item() + 1 if num_nodes is None else num_nodes
 
 
-def pygstyle2nx(filepath) -> nx.Graph:
+def load_graph(filepath) -> nx.Graph:
     nx_graph = nx.Graph()
     # print(nx_graph.number_of_edges())
     edges = []
@@ -215,7 +215,7 @@ def induced_subgraph(graph, src, neighbors, k=1):
 
 
 def k_hop_random_walk(hop=1, walks=10, subs=5):
-    graph = pygstyle2nx("dataset/krogan/krogan_core.txt")
+    graph = load_graph("dataset/krogan/krogan_core.txt")
     # Set random seed
     torch.manual_seed(1234)
     candidate_sets = {}
@@ -359,7 +359,6 @@ def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
 
         # select the neighbors from root node as the source node
         new_nodes = col[edge_mask]
-
         # select the neighbors from other nodes to root node
         col_mask = torch.index_select(col_mask, 0, col)
         edge_mask[[col_mask == True]] = True
@@ -371,17 +370,17 @@ def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
             if walk > walks:
                 break
             next_node = new_nodes[random.randint(0, len(new_nodes) - 1)]
-            pos = edge_index.size(1) - 1
-            for i in range(edge_index.size(1)):
-                if edge_mask[i] == False:
-                    continue
-                if edge_index[:, i].equal(torch.Tensor([subsets[0], next_node]).int()) or edge_index[:, i].equal(
-                        torch.Tensor([next_node, subsets[0]]).int()):
-                    pos = i
-                    break
-                # edge_attr[edge_index[0] == subsets[0] and ]
-            if edge_attr[pos] < random.random():
-                continue
+            # pos = edge_index.size(1) - 1
+            # for i in range(edge_index.size(1)):
+            #     if edge_mask[i] == False:
+            #         continue
+            #     if edge_index[:, i].equal(torch.Tensor([subsets[0], next_node]).int()) or edge_index[:, i].equal(
+            #             torch.Tensor([next_node, subsets[0]]).int()):
+            #         pos = i
+            #         break
+            #     # edge_attr[edge_index[0] == subsets[0] and ]
+            # if edge_attr[pos] < random.random():
+            #     continue
             tmp.append(int(next_node))
             walk += 1
 

@@ -69,7 +69,7 @@ class PygGraphPropPredDataset(InMemoryDataset):
                 # Iterate over files in both folders simultaneously
                 for file1, file2 in zip(files1, files2):
                     queryset = pd.read_csv(osp.join(root1, file1), header=None, skiprows=4, delimiter=" ")
-                    edge_index = torch.from_numpy(queryset.iloc[:, 1:3].values.reshape(2, -1))
+                    edge_index = torch.from_numpy(queryset.iloc[:, 1:3].values.T)
                     edge_attr = torch.from_numpy(queryset.iloc[:, -1].values.reshape(-1, 1))
 
                     label = pd.read_csv(osp.join(root2, file2), header=None, delimiter=" ")
