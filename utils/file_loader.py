@@ -11,10 +11,9 @@ class QueryDecompose(object):
 		"""
         self.queryset = queryset_dir
         self.dataset = dataset
-        self.queryset_load_path = os.path.join(queryset_dir, dataset)
+        self.queryset_load_path = os.path.join(dataset, queryset_dir)
         self.true_card_dir = true_card_dir
-        self.true_card_load_path = os.path.join(true_card_dir, dataset)
-        self.k = k
+        self.true_card_load_path = os.path.join(dataset, true_card_dir)
         self.num_queries = 0
         self.all_subsets = {}  # {(size, patten) -> [(decomp_graphs, true_card]}
         # preserve the undecomposed queries
@@ -31,7 +30,6 @@ class QueryDecompose(object):
             if not os.path.isdir(queries_dir):
                 continue
             pattern, size = subset_dir.split("_")[0], int(subset_dir.split("_")[1])  # Chain(pattern)_size
-            self.all_subsets[(pattern, size)] = []
             self.all_queries[(pattern, size)] = []
             for query_dir in os.listdir(queries_dir):
                 query_load_path = os.path.join(self.queryset_load_path, subset_dir, query_dir)
@@ -41,20 +39,17 @@ class QueryDecompose(object):
                 # load, decompose the query
                 query, label_den = self.load_query(query_load_path)
                 avg_label_den += label_den
-                graphs = self.decompose(query)
                 true_card, true_var = self.load_card(card_load_path)
                 if true_card >= self.upper_card or true_card < self.lower_card:
                     continue
                 true_card = true_card + 1 if true_card == 0 else true_card
-                self.all_subsets[(pattern, size)].append((graphs, true_card, true_var))
                 self.all_queries[(pattern, size)].append((query, true_card, true_var))
                 self.num_queries += 1
             # save the decomposed query
             query_save_path = os.path.splitext(query_load_path)[0] + ".pickle"
-            self.save_decomposed_query(graphs, true_card, query_save_path)
+            self.save_decomposed_query(query, true_card, query_save_path)
             # print("save decomposed query: {}".format(query_save_path))
         print("average label density: {}".format(avg_label_den / self.num_queries))
-
 
     def node_reorder(self, query, nodes_list, edges_list):
         idx_dict = {}
@@ -120,3 +115,52 @@ class QueryDecompose(object):
             obj = {"graphs": graphs, "card": card}
             pickle.dump(obj=obj, file=out_file, protocol=3)
             out_file.close()
+
+
+class Queryset(object):
+    def __init__(self, args, all_queries):
+        """
+        all_queries: {(size, patten) -> [(graphs, true_card, ture_var]} // all queries subset
+        """
+        self.args = args
+        self.data_dir = args.data_dir
+        self.dataset = args.dataset
+        self.num_queries = 0
+        self.all_subsets = self.transform_motif_to_tensors(all_queries)
+
+    def transform_motif_to_tensors(self, all_queries):
+        tmp_subsets = {}
+        for (pattern, size), graphs_card_pairs in all_queries.items():
+            tmp_subsets[(pattern, size)] = []
+            for (motifs, card, var) in graphs_card_pairs:
+                decomp_x, decomp_edge_index, decomp_edge_weight, _ = \
+                    self._get_motif_data(motifs)
+                tmp_subsets[(pattern, size)].append((decomp_x, decomp_edge_index, decomp_edge_weight, card, var))
+                self.num_queries += 1
+
+        return tmp_subsets
+
+    def _get_motif_data(self, motifs):
+        x = []
+        edge_index = []
+        edge_attr = []
+        for motif in motifs:
+            if self.args.embed_type == "freq":
+                node_attr = self._get_nodes_attr_freq(motif)
+            elif self.args.embed_type == "n2v" or self.args.embed_type == "prone": # node2vec
+                node_attr = self._get_nodes_attr_embed(motif)
+            if self.args.edge_embed_type == "freq":
+                edge_index, edge_attr = self._get_edges_index_freq(motif)
+                if self.args.model_type == "GCN2" or self.args.model_type == "FA" or self.args.model_type == "GCN" or self.args.model_type == "Graph":
+                    edge_index, edge_attr = self._get_edge_weight_freq(motif)
+    def _get_nodes_attr_freq(self, motif):
+        pass
+
+    def _get_nodes_attr_embed(self, motif):
+        pass
+
+    def _get_edges_index_freq(self, motif):
+        pass
+
+    def _get_edge_weight_freq(self, motif):
+        pass
