@@ -89,4 +89,5 @@ class PygGraphPropPredDataset(InMemoryDataset):
 
 
 if __name__ == "__main__":
-    dataset = PygGraphPropPredDataset()
+    dataset = torch.load("dataset/krogan_core/data.pt")
+    print(dataset)
