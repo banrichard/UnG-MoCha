@@ -62,27 +62,6 @@ class Batch(Data):
                     cumsum[key] = cumsum[key] + 1
                 elif key == 'original_edge_index':
                     cumsum[key] = cumsum[key] + data.num_subgraphs
-                elif key == 'tree_edge_index':
-                    cumsum[key] = cumsum[key] + data.num_cliques
-                elif key == 'atom2clique_index':
-                    cumsum[key] = cumsum[key] + torch.tensor([[data.num_atoms], [data.num_cliques]])
-                elif key == 'edge_index_2':
-                    cumsum[key] = cumsum[key] + data.iso_type_2.shape[0]
-                elif key == 'edge_index_3':
-                    cumsum[key] = cumsum[key] + data.iso_type_3.shape[0]
-                elif key == 'batch_2':
-                    cumsum[key] = cumsum[key] + 1
-                elif key == 'batch_3':
-                    cumsum[key] = cumsum[key] + 1
-                elif key == 'assignment2_to_subgraph':
-                    cumsum[key] = cumsum[key] + data.num_subgraphs
-                elif key == 'assignment3_to_subgraph':
-                    cumsum[key] = cumsum[key] + data.num_subgraphs
-                elif key == 'assignment_index_2':
-                    cumsum[key] = cumsum[key] + torch.LongTensor([[data.num_nodes], [data.iso_type_2.shape[0]]])
-                elif key == 'assignment_index_3':
-                    inc = data.iso_type_2.shape[0] if 'assignment_index_2' in data else data.num_nodes
-                    cumsum[key] = cumsum[key] + torch.LongTensor([[inc], [data.iso_type_3.shape[0]]])
                 else:
                     cumsum[key] = cumsum[key] + data.__inc__(key, item)
                 batch[key].append(item)

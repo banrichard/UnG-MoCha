@@ -9,10 +9,10 @@ import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import from_networkx
-
 from batch import Batch
-# from dataloader import DataLoader
 
+
+# from dataloader import DataLoader
 
 
 def load_graph(filepath) -> nx.Graph:
@@ -22,7 +22,6 @@ def load_graph(filepath) -> nx.Graph:
     graph_data = pd.read_csv(filepath, header=None, skiprows=1, delimiter=" ")
     for i in range(len(graph_data)):
         edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'prob': graph_data.iloc[i, 2]}))
-
     nx_graph.add_edges_from(edges)
     return nx_graph
 
@@ -49,22 +48,34 @@ def k_hop_induced_subgraph(graph, src, k=1):
     return subgraph.copy()
 
 
-def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=10, subs=1):
+def candidate_filter(candidate_set):
+    final_candidate = None
+    prob = 0
+    for candidate in candidate_set:
+        cur_prob = 1
+        for e in candidate.edges(data=True):
+            cur_prob *= e[2]['prob']
+        if cur_prob > prob:
+            final_candidate = candidate
+            prob = cur_prob
+    return final_candidate
+
+
+def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=20, subs=5):
     # Set random seed
-    random.seed(6324)
+    random.seed(1)
     candidate_set = []
     # Generate 1-hop subgraphs using random walk
     for s in range(subs):
         node_list = [node]
         for i in range(walks):
-            neighbors = list(graph.neighbors(node))
+            neighbors = list(subgraph.neighbors(node))
             if len(neighbors) == 0:
                 break
             next_node = neighbors[random.randint(0, len(neighbors) - 1)]
             node_list.append(next_node)
         node_list = set(node_list)
         tmp_graph = subgraph.subgraph(list(node_list)).copy()
-        remove_node_list = []
         remove_edge_list = []
         for (u, v) in tmp_graph.edges():
             if tmp_graph.edges[u, v]['prob'] < random.random():
@@ -73,7 +84,8 @@ def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=10, subs=1):
         remove_node_list = [node for node in tmp_graph.nodes() if tmp_graph.degree(node) == 0]
         tmp_graph.remove_nodes_from(remove_node_list)
         candidate_set.append(tmp_graph)
-    return candidate_set
+    subgraph_with_high_probability = candidate_filter(candidate_set)
+    return subgraph_with_high_probability
 
 
 def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
@@ -104,7 +116,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
                                                                                                      1).contiguous()
         sub_x = x[list(subgraph.nodes()), :]
         pyg_subgraph = Data(x=sub_x, edge_index=sub_edge_index, edge_attr=sub_edge_attr)
-            # pyg_subgraph = from_networkx(subgraph, group_edge_attrs=['prob'])
+        # pyg_subgraph = from_networkx(subgraph, group_edge_attrs=['prob'])
 
         # for n in subgraph.nodes():
         #     subgraph.add_node(n,idx = n)
@@ -121,29 +133,31 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
     pyg_batch.original_edge_index = edge_index
     pyg_batch.original_edge_attr = edge_attr
     pyg_batch.node_to_subgraph = pyg_batch.batch
+    del pyg_batch.batch
     pyg_batch.subgraph_to_graph = torch.zeros(len(pyg_batch), dtype=torch.long)
     return pyg_batch
 
 
-# graph = load_graph("../dataset/krogan/krogan_core.txt")
-# # subgraph = k_hop_induced_subgraph(graph, 0)
-# # candidate_sets = generate_candidate_sets(subgraph, 0)
-# candidate_sets = {}
-# for node in range(graph.number_of_nodes()):
-#     subgraph = k_hop_induced_subgraph(graph, node)
-#     candidate_set = random_walk_on_subgraph(subgraph, node)
-#     candidate_sets[node] = candidate_set[random.randint(0, len(candidate_set) - 1)]
-# start_time = time.time()
-# batch = create_batch(graph, candidate_sets, "../dataset/krogan/embedding/krogan_embeded_sorted.csv")
-# end_time = time.time()
-# torch.save(batch,"../dataset/krogan/graph_batch.pt")
-# print("running time of batch creation is {}s".format(end_time - start_time))
-# print(batch)
+if __name__ == "__main__":
+
+    graph = load_graph("../dataset/krogan/krogan_core.txt")
+    # subgraph = k_hop_induced_subgraph(graph, 0)
+    # candidate_sets = generate_candidate_sets(subgraph, 0)
+    candidate_sets = {}
+    for node in range(graph.number_of_nodes()):
+        subgraph = k_hop_induced_subgraph(graph, node)
+        candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
+    start_time = time.time()
+    batch = create_batch(graph, candidate_sets)
+    end_time = time.time()
+    # torch.save(batch,"../dataset/krogan/graph_batch.pt")
+    print("running time of batch creation is {}s".format(end_time - start_time))
+    batch.to_data_list()
 
 # print(candidate_sets[0].edges)
 # print(len(candidate_sets[0].edges))
-batch = torch.load("../dataset/krogan/graph_batch.pt")
-
-loader = DataLoader(batch,batch_size=1,shuffle=False)
+# batch = torch.load("../dataset/krogan/graph_batch.pt")
 #
-batch = next(iter(loader))
+# loader = DataLoader(batch,batch_size=1,shuffle=False)
+# #
+# batch = next(iter(loader))

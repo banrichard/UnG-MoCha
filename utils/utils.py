@@ -1,14 +1,20 @@
+import math
+import os
 import queue
 import random
+from multiprocessing import Pool
 
 import pandas as pd
 import torch
+from torch.optim.lr_scheduler import LambdaLR
 from torch_geometric.data import Data
 from torch_geometric.utils import to_scipy_sparse_matrix, to_networkx
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 import scipy.sparse as ssp
 import numpy as np
 import networkx as nx
+from tqdm import tqdm
+
 from .batch import Batch
 
 
@@ -303,38 +309,6 @@ def neighbors(fringe, A):
     return res
 
 
-class return_prob(object):
-    def __init__(self, steps=50):
-        self.steps = steps
-
-    def __call__(self, data):
-        adj = to_scipy_sparse_matrix(data.edge_index, num_nodes=data.num_nodes).tocsr()
-        adj += ssp.identity(data.num_nodes, dtype='int', format='csr')
-        rp = np.empty([data.num_nodes, self.steps])
-        inv_deg = ssp.lil_matrix((data.num_nodes, data.num_nodes))
-        inv_deg.setdiag(1 / adj.sum(1))
-        P = inv_deg * adj
-        if self.steps < 5:
-            Pi = P
-            for i in range(self.steps):
-                rp[:, i] = Pi.diagonal()
-                Pi = Pi * P
-        else:
-            inv_sqrt_deg = ssp.lil_matrix((data.num_nodes, data.num_nodes))
-            inv_sqrt_deg.setdiag(1 / (np.array(adj.sum(1)) ** 0.5))
-            B = inv_sqrt_deg * adj * inv_sqrt_deg
-            L, U = eigh(B.todense())
-            W = U * U
-            Li = L
-            for i in range(self.steps):
-                rp[:, i] = W.dot(Li)
-                Li = Li * L
-
-        data.rp = torch.FloatTensor(rp)
-
-        return data
-
-
 def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
                  num_nodes=None,
                  max_nodes_per_hop=None, walks=10, subs=5):
@@ -406,3 +380,172 @@ def new_k_hop_rw(node_idx, num_hops, edge_index, edge_attr,
     edge_index = edge_index[:, edge_mask]
 
     return subset, edge_index, edge_mask
+
+
+def get_enc_len(x, base):
+    l = 0
+    while x:
+        l += 1
+        x = x // base
+    return l
+
+
+def int2onehot(x, len_x, base=10):
+    if isinstance(x, (int, list)):
+        x = np.array(x)
+    x_shape = x.shape
+    x = x.reshape(-1)
+    one_hot = np.zeros((len_x * base, x.shape[0]), dtype=np.float32)
+    x = x % (base ** len_x)
+    idx = one_hot.shape[0] - base
+    while np.any(x):
+        x, y = x // base, x % base
+        cond = y.reshape(1, -1) == np.arange(0, base, dtype=y.dtype).reshape(base, 1)
+        one_hot[idx:idx + base] = np.where(cond, 1.0, 0.0)
+        idx -= base
+    while idx >= 0:
+        one_hot[idx] = 1.0
+        idx -= base
+    one_hot = one_hot.transpose(1, 0).reshape(*x_shape, len_x * base)
+    return one_hot
+
+
+def anneal_fn(fn, t, T, lambda0=0.0, lambda1=1.0):
+    if not fn or fn == "none":
+        return lambda1
+    elif fn == "logistic":
+        K = 8 / T
+        return float(lambda0 + (lambda1 - lambda0) / (1 + np.exp(-K * (t - T / 2))))
+    elif fn == "linear":
+        return float(lambda0 + (lambda1 - lambda0) * t / T)
+    elif fn == "cosine":
+        return float(lambda0 + (lambda1 - lambda0) * (1 - math.cos(math.pi * t / T)) / 2)
+    elif fn.startswith("cyclical"):
+        R = 0.5
+        t = t % T
+        if t <= R * T:
+            return anneal_fn(fn.split("_", 1)[1], t, R * T, lambda0, lambda1)
+        else:
+            return anneal_fn(fn.split("_", 1)[1], t - R * T, R * T, lambda1, lambda0)
+    elif fn.startswith("anneal"):
+        R = 0.5
+        t = t % T
+        if t <= R * T:
+            return anneal_fn(fn.split("_", 1)[1], t, R * T, lambda0, lambda1)
+        else:
+            return lambda1
+    else:
+        raise NotImplementedError
+
+
+def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, last_epoch=-1, min_percent=0.0):
+    """ Create a schedule with a learning rate that decreases linearly after
+    linearly increasing during a warmup period.
+    """
+
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return max(min_percent,
+                   float(num_training_steps - current_step) / float(max(1.0, num_training_steps - num_warmup_steps)))
+
+    return LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
+def load_data(graph_dir, pattern_dir, num_workers=4):
+    patterns = read_patterns_from_dir(pattern_dir, num_workers=num_workers)
+    graphs = read_graphs_from_dir(graph_dir, num_workers=num_workers)
+
+    train_data, dev_data, test_data = list(), list(), list()
+    train_count = 0
+    dev_count = 0
+    train_length = 5000
+    dev_length = 500
+    num = 0
+    for p, pattern in patterns.items():
+        if p in graphs:
+            for g, graph in graphs[p].items():
+                x = dict()
+                x["id"] = ("%s-%s" % (p, g))
+                x["pattern"] = pattern
+                x["graph"] = graph
+                g_idx = int(g.rsplit("_", 1)[-1])
+
+                if num % 100 == 0 and train_count < train_length:
+                    train_data.append(x)
+                    train_count += 1
+                elif num % 100 == 1 and dev_count < dev_length:
+                    dev_data.append(x)
+                    dev_count += 1
+                else:
+                    test_data.append(x)
+                num += 1
+        elif len(graphs) == 1 and "raw" in graphs.keys():
+            for g, graph in graphs["raw"].items():
+                x = dict()
+                x["id"] = ("%s-%s" % (p, g))
+                x["pattern"] = pattern
+                x["graph"] = graph
+                g_idx = int(g.rsplit("_", 1)[-1])
+                if g_idx % 3 == 0:
+                    dev_data.append(x)
+                elif g_idx % 3 == 1:
+                    test_data.append(x)
+                else:
+                    train_data.append(x)
+    return OrderedDict({"train": train_data, "dev": dev_data, "test": test_data})
+
+
+def read_graphs_from_dir(dirpath, num_workers=4):
+    graphs = dict()
+    subdirs = _get_subdirs(dirpath)
+    with Pool(num_workers if num_workers > 0 else os.cpu_count()) as pool:
+        results = list()
+        for subdir in subdirs:
+            results.append((subdir, pool.apply_async(_read_graphs_from_dir, args=(subdir,))))
+        pool.close()
+
+        for subdir, x in tqdm(results):
+            x = x.get()
+            graphs[os.path.basename(subdir)] = x
+    return graphs
+
+
+def read_patterns_from_dir(dirpath, num_workers=4):
+    patterns = dict()
+    subdirs = _get_subdirs(dirpath)
+    with Pool(num_workers if num_workers > 0 else os.cpu_count()) as pool:
+        results = list()
+        for subdir in subdirs:
+            results.append((subdir, pool.apply_async(_read_graphs_from_dir, args=(subdir,))))
+        pool.close()
+
+        for subdir, x in tqdm(results):
+            x = x.get()
+            patterns.update(x)
+            # patterns[os.path.basename(subdir)] = x
+    return patterns
+
+
+def split_and_batchify_graph_feats(batched_graph_feats, graph_sizes):
+    bsz = graph_sizes.size(0)
+    dim, dtype, device = batched_graph_feats.size(-1), batched_graph_feats.dtype, batched_graph_feats.device
+
+    min_size, max_size = graph_sizes.min(), graph_sizes.max()
+    mask = torch.ones((bsz, max_size), dtype=torch.uint8, device=device, requires_grad=False)
+
+    if min_size == max_size:
+        return batched_graph_feats.view(bsz, max_size, -1), mask
+    else:
+        graph_sizes_list = graph_sizes.view(-1).tolist()
+        unbatched_graph_feats = list(torch.split(batched_graph_feats, graph_sizes_list, dim=0))
+        for i, l in enumerate(graph_sizes_list):
+            if l == max_size:
+                continue
+            elif l > max_size:
+                unbatched_graph_feats[i] = unbatched_graph_feats[i][:max_size]
+            else:
+                mask[i, l:].fill_(0)
+                zeros = torch.zeros((max_size - l, dim), dtype=dtype, device=device, requires_grad=False)
+                unbatched_graph_feats[i] = torch.cat([unbatched_graph_feats[i], zeros], dim=0)
+        return torch.stack(unbatched_graph_feats, dim=0), mask

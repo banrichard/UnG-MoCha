@@ -42,7 +42,7 @@ class Converter(InMemoryDataset):
         edge_index = graph_data.iloc[:, 0:2].values.T
         edge_attr = graph_data.iloc[:, -1].values.reshape(-1, 1)
 
-        x = pd.read_csv("dataset/krogan/embedding/krogan_embeded_sorted.csv", header=None, delimiter=" ").iloc[:,1:].values
+        x = pd.read_csv("dataset/krogan/embedding/krogan_core.csv", header=None, delimiter=" ").iloc[:, 1:].values
         x = torch.from_numpy(x)
         edge_index = torch.from_numpy(edge_index)
         edge_attr = torch.from_numpy(edge_attr)
