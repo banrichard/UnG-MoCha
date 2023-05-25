@@ -125,14 +125,14 @@ class QueryPreProcessing(object):
 
 
 class Queryset(object):
-    def __init__(self, args, all_queries):
+    def __init__(self, dataset_name, data_dir, dataset, all_queries):
         """
         all_queries: {(size, patten) -> [(graphs, true_card, ture_var]} // all queries subset
         """
-        self.args = args
-        self.dataset_name = args.dataset_name
-        self.data_dir = args.data_dir
-        self.dataset = args.dataset
+
+        self.dataset_name = dataset_name
+        self.data_dir = data_dir
+        self.dataset = dataset
         self.num_queries = 0
         self.graph = load_graph(
             os.path.join(self.data_dir, self.dataset,
@@ -141,29 +141,18 @@ class Queryset(object):
         self.node_label_fre = 0
         self.edge_label_fre = 0
         self.label_dict = {key: key for key in self.node_label_card.keys()}
-        embed_feat_path = os.path.join(args.embed_feat_dir, "{}.csv".format(args.dataset_name))
-        embed_feat = np.loadtxt(embed_feat_path, delimiter=" ")[:, 1:]
+        # embed_feat_path = os.path.join(args.embed_feat_dir, "{}.csv".format(args.dataset_name))
+        # embed_feat = np.loadtxt(embed_feat_path, delimiter=" ")[:, 1:]
+        #
+        # # assert embed_feat.shape[0] == len(self.node_label_card) + 1, "prone embedding size error!"
+        # self.embed_dim = embed_feat.shape[1]
+        # self.embed_feat = torch.from_numpy(embed_feat)
 
-        # assert embed_feat.shape[0] == len(self.node_label_card) + 1, "prone embedding size error!"
-        self.embed_dim = embed_feat.shape[1]
-        self.embed_feat = torch.from_numpy(embed_feat)
-        if args.embed_type == "freq":
-            self.num_node_feat = len(self.node_label_card)
-        elif args.embed_type == "n2v" or args.embed_type == "prone" or args.embed_type == "nrp":
-            self.num_node_feat = self.embed_dim
-        else:
-            self.num_node_feat = self.embed_dim + len(self.node_label_card)
+        self.num_node_feat = len(self.node_label_card)
 
-        if args.edge_embed_type == "freq":
-            self.edge_embed_feat = None
-            self.edge_embed_dim = 0
-            self.num_edge_feat = len(self.edge_label_card)
-        else:
-            edge_embed_feat_path = os.path.join(args.embed_feat_dir, "{}_edge.csv".format(args.dataset_name))
-            edge_embed_feat = np.loadtxt(edge_embed_feat_path, delimiter=" ")[:, 1:]
-            self.edge_embed_dim = edge_embed_feat.shape[1]
-            self.edge_embed_feat = torch.from_numpy(edge_embed_feat)
-            self.num_edge_feat = self.edge_embed_dim
+        self.edge_embed_feat = None
+        self.edge_embed_dim = 0
+        self.num_edge_feat = len(self.edge_label_card)
         self.all_subsets = self.transform_motif_to_tensors(all_queries)
         self.all_sizes = {}
         for (pattern, size), graphs_card_pairs in self.all_subsets.items():
@@ -196,16 +185,8 @@ class Queryset(object):
         x = []
         edge_index = None
         edge_attr = None
-        if self.args.embed_type == "freq":
-            node_attr = self._get_nodes_attr_freq(motif)
-        if self.args.embed_type == "n2v" or self.args.embed_type == "prone":  # node2vec
-            node_attr = self._get_nodes_attr_embed(motif)
-        if self.args.edge_embed_type == "freq":
-            edge_index, edge_attr = self._get_edges_index_freq(motif)
-            if self.args.model_type == "FA" or self.args.model_type == "GCN" or self.args.model_type == "Graph":
-                edge_index, edge_attr = self._get_edge_weight_freq(motif)
-        else:
-            edge_index, edge_attr = self._get_edges_index_embed(motif)
+        node_attr = self._get_nodes_attr_freq(motif)
+        edge_index, edge_attr = self._get_edges_index_freq(motif)
         x = node_attr
         return x, edge_index, edge_attr
 
@@ -217,15 +198,15 @@ class Queryset(object):
                 self.node_label_fre += 1
         return node_attr
 
-    def _get_nodes_attr_embed(self, motif):
-        node_attr = torch.zeros(size=(motif.number_of_nodes(), self.embed_dim), dtype=torch.float)
-        for v in motif.nodes():
-            if len(motif.nodes[v]["labels"]) == 0:
-                continue
-            for label in motif.nodes[v]["labels"]:
-                node_attr[v] += self.embed_feat[self.label_dict[label]]
-                self.node_label_fre += 1
-        return node_attr
+    # def _get_nodes_attr_embed(self, motif):
+    #     node_attr = torch.zeros(size=(motif.number_of_nodes(), self.embed_dim), dtype=torch.float)
+    #     for v in motif.nodes():
+    #         if len(motif.nodes[v]["labels"]) == 0:
+    #             continue
+    #         for label in motif.nodes[v]["labels"]:
+    #             node_attr[v] += self.embed_feat[self.label_dict[label]]
+    #             self.node_label_fre += 1
+    #     return node_attr
 
     def _get_edges_index_freq(self, motif):
         edge_index = torch.ones(size=(2, motif.number_of_edges()), dtype=torch.long)
@@ -329,3 +310,10 @@ class QueryDataset(Dataset):
         var = torch.tensor(var, dtype=torch.float)
 
         return x, edge_index, edge_attr, card, var
+
+
+def _to_datasets(all_sets):
+    datasets = [QueryDataset(queries=queries)
+                for queries in all_sets] if isinstance(all_sets, list) \
+        else [QueryDataset(queries=all_sets)]
+    return datasets

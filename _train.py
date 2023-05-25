@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import warnings
 from functools import partial
 from collections import OrderedDict
-from torch.utils.data import DataLoader
+from utils.dataloader import DataLoader
 import tqdm
 from utils.loss_cal import get_best_epochs, compute_mae, compute_rmse, compute_p_r_f1, compute_tp, bp_compute_abmae, \
     bp_compute_large10_abmae, bp_compute_large20_abmae
@@ -47,7 +47,7 @@ train_config = {
     "update_every": 1,  # actual batch_sizer = batch_size * update_every
     "print_every": 100,
     "init_emb": True,  # None, Normal
-    "share_emb": True,  # sharing embedding requires the same vector length
+    "share_emb": False,  # sharing embedding requires the same vector length
     "share_arch": False,  # sharing architectures
     "dropout": 0.2,
     "dropatt": 0.2,
@@ -65,7 +65,7 @@ train_config = {
     "model": "EdgeMean",  # CNN, RNN, TXL, RGCN, RGIN, RSIN
 
     "emb_dim": 128,
-    "activation_function": "leaky_relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
+    "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
 
     "predict_net": "SumPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
     # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,
@@ -101,6 +101,7 @@ train_config = {
     "metadata_dir": "../data/debug/metadata",
     "save_data_dir": "../data/debug",
     "save_model_dir": "../dumps/debug",
+
 }
 
 

@@ -103,18 +103,19 @@ class NNGINConcatConv(MessagePassing):
 
 
 class MotifGNN(nn.Module):
-    def __init__(self, args, num_node_feat, num_edge_feat):
+    def __init__(self, num_layers, num_g_hid, num_e_hid, out_g_ch, model_type, dropout, num_node_feat,
+                 num_edge_feat):
         super(MotifGNN, self).__init__()
         self.num_node_feat = num_node_feat
         self.num_edge_feat = num_edge_feat
-        self.num_layers = args.num_layers
-        self.num_hid = args.num_g_hid
-        self.num_e_hid = args.num_e_hid
-        self.num_out = args.out_g_ch
-        self.model_type = args.model_type
-        self.dropout = args.dropout
+        self.num_layers = num_layers
+        self.num_hid = num_g_hid
+        self.num_e_hid = num_e_hid
+        self.num_out = out_g_ch
+        self.model_type = model_type
+        self.dropout = dropout
         self.convs = nn.ModuleList()
-
+        self.agg = nn.Linear(1, self.num_out, bias=False)
         cov_layer = self.build_cov_layer(self.model_type)
 
         for l in range(self.num_layers):
@@ -133,6 +134,7 @@ class MotifGNN(nn.Module):
                 self.convs.append(cov_layer(hidden_input_dim, hidden_output_dim, self.num_e_hid))
             else:
                 print("Unsupported model type!")
+        self.reset_parameters()
 
     def build_cov_layer(self, model_type):
         if model_type == "GIN":
@@ -165,6 +167,9 @@ class MotifGNN(nn.Module):
         else:
             print("Unsupported model type!")
 
+    def reset_parameters(self):
+        torch.nn.init.xavier_uniform_(self.agg.weight)
+
     def forward(self, x, edge_index, edge_attr=None):
         if self.model_type == 'FA' or self.model_type == 'GCN2':
             x_0 = x
@@ -186,5 +191,6 @@ class MotifGNN(nn.Module):
             if i < self.num_layers - 1:
                 x = F.dropout(x, p=self.dropout, training=self.training)
 
-        x = torch.unsqueeze(torch.sum(x, dim=0), dim=0)
+        x = torch.unsqueeze(torch.sum(x, dim=0), dim=0)  # agg
+        x = F.relu(self.agg(x))  # relu(Q*agg(x))
         return x

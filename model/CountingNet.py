@@ -4,6 +4,7 @@ import torch.nn as nn
 from model.GraphModel import GraphModel
 from model.HUGNN import NestedGIN
 from model.motifNet import MotifGNN
+from PredictNet import PatternReadout, GraphReadout
 
 
 def split_batch(index, input, length, max):
@@ -19,7 +20,7 @@ class EdgeMean(GraphModel):
         # self.ignore_norm = config["rgcn_ignore_norm"]
 
         # create networks
-
+        # embed the node features and edge features
         p_emb_dim, g_emb_dim, p_e_emb_dim, g_e_emb_dim = self.get_emb_dim()
         # TODO: modify create_net to adapt the NNGIN and NestedGIN
         self.g_net, g_dim = self.create_graph_net(
@@ -31,7 +32,6 @@ class EdgeMean(GraphModel):
             name="pattern", input_dim=p_emb_dim * 3, hidden_dim=config["ppn_hidden_dim"],
             num_layers=config["ppn_pattern_num_layers"], act_func=self.act_func,
             dropout=self.dropout, bsz=config["batch_size"])
-
         # create predict layers
 
         if self.add_enc:
@@ -43,11 +43,7 @@ class EdgeMean(GraphModel):
             g_dim += 2
         self.predict_net = self.create_predict_net(config["predict_net"],
                                                    pattern_dim=p_dim, graph_dim=g_dim,
-                                                   hidden_dim=config["predict_net_hidden_dim"],
-                                                   num_heads=config["predict_net_num_heads"],
-                                                   recurrent_steps=config["predict_net_recurrent_steps"],
-                                                   mem_len=config["predict_net_mem_len"],
-                                                   mem_init=config["predict_net_mem_init"])
+                                                   hidden_dim=config["predict_net_hidden_dim"])
 
         self.g_linear = torch.nn.Linear(g_emb_dim * 3, config["ppn_hidden_dim"])
         self.p_linear = torch.nn.Linear(p_emb_dim * 3, config["ppn_hidden_dim"])
@@ -65,12 +61,16 @@ class EdgeMean(GraphModel):
         return net, hidden_dim
 
     def create_pattern_net(self, input_dim, **kwargs):
+        # num_layers, num_g_hid, num_e_hid, out_g_ch, model_type, dropout
         num_layers = kwargs.get("num_layers", 1)
         hidden_dim = kwargs.get("num_g_hid", 128)
         e_hidden_dim = kwargs.get("num_e_hid", 128)
         dropout = kwargs.get("dropout", 0.2)
         model_type = kwargs.get("model_type", "NNGINConcat")
-        net = MotifGNN()
+        output_dim = kwargs.get("out_g_ch", 64)
+        num_edge_feat = kwargs.get("num_edge_feat", 1)
+        net = MotifGNN(num_layers=num_layers, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim, dropout=dropout,
+                       model_type=model_type, out_g_ch=output_dim, num_edge_feat=num_edge_feat, num_node_feat=input_dim)
         return net, hidden_dim
 
     def GraphEmbedding(self, g_vl_emb, g_el_emb, adj):
@@ -91,72 +91,15 @@ class EdgeMean(GraphModel):
         result = torch.cat([u, v], dim=1)
         return result
 
-    def forward(self, pattern, pattern_len, pattern_e_len, graph, graph_len, graph_e_len, p_e_max, g_e_max, p_index,
-                g_index):
-        bsz = pattern_len.size(0)
+    def forward(self, motif_x, motif_edge_index, motif_edge_attr, graph):
         zero_mask = None
 
-        p_emb, g_vl_emb, p_el_emb, g_el_emb = self.get_emb(pattern, graph)
-        pattern_output = self.GraphEmbedding(p_emb, p_el_emb, pattern.adjacency_matrix()._indices())
-        pattern_eadj = pattern.edata["eadj"]
-        pattern_input = split_batch(p_index, pattern_output, pattern_e_len, p_e_max)
-        pattern_eadj = split_batch(p_index, pattern_eadj, pattern_e_len, p_e_max)
-        pattern_first = self.p_linear(pattern_input)
+        p_emb, g_vl_emb, p_el_emb, g_el_emb = self.get_emb(motif_edge_attr, graph)
 
-        for p_rgcn in self.p_net:
-            o = p_rgcn(pattern_input, pattern_eadj, p_e_max)
-            pattern_output = o + pattern_first
-            pattern_first = pattern_output
-
-        graph_output = self.GraphEmbedding(g_vl_emb, g_el_emb, graph.adjacency_matrix()._indices())
-        if zero_mask is not None:
-            graph_output.masked_fill_(zero_mask, 0.0)
-
-        graph_eadj = graph.edata["eadj"]
-        graph_input = split_batch(g_index, graph_output, graph_e_len, g_e_max)
-        graph_eadj = split_batch(g_index, graph_eadj, graph_e_len, g_e_max)
-        graph_first = self.g_linear(graph_input)
-        zero_output_mask = None
-        for g_rgcn in self.g_net:
-            o = g_rgcn(graph_input, graph_eadj, g_e_max, zero_output_mask)
-            graph_output = o + graph_first
-            graph_first = graph_output
-            # graph_output.masked_fill_(zero_output_mask, 0.0)
+        # graph_output.masked_fill_(zero_output_mask, 0.0)
         # graph_output = graph_output.resize(graph_output.size(0) * graph_output.size(1), graph_output.size(2))
-
-        '''if zero_mask is not None:
-            graph_output.masked_fill_(zero_mask, 0.0)'''
-
-        if self.add_enc and self.add_degree:
-
-            pattern_enc, graph_enc, pattern_e_enc, graph_e_enc = self.get_enc(pattern, graph)
-            p_enc = self.PredictEnc(pattern_e_enc, pattern_enc, pattern.adjacency_matrix()._indices())
-            g_enc = self.PredictEnc(graph_e_enc, graph_enc, graph.adjacency_matrix()._indices())
-            p_indeg = self.CatIndeg(pattern.ndata["indeg"].unsqueeze(-1), pattern.adjacency_matrix()._indices())
-            g_indeg = self.CatIndeg(graph.ndata["indeg"].unsqueeze(-1), graph.adjacency_matrix()._indices())
-            p_enc = split_batch(p_index, p_enc, pattern_e_len, p_e_max).reshape(-1, p_enc.size(1))
-            g_enc = split_batch(g_index, g_enc, graph_e_len, g_e_max).reshape(-1, g_enc.size(1))
-            p_indeg = split_batch(p_index, p_indeg, pattern_e_len, p_e_max).reshape(-1, p_indeg.size(1))
-            g_indeg = split_batch(g_index, g_indeg, graph_e_len, g_e_max).reshape(-1, g_indeg.size(1))
-            pattern_output = pattern_output.reshape(-1, pattern_output.size(2))
-            graph_output = graph_output.reshape(-1, graph_output.size(2))
-            pattern_output = torch.cat([p_enc, pattern_output, p_indeg], dim=1)
-            graph_output = torch.cat([g_enc, graph_output, g_indeg], dim=1)
-            pattern_output = pattern_output.reshape(bsz, -1, pattern_output.size(1))
-            graph_output = graph_output.reshape(bsz, -1, graph_output.size(1))
-
-        elif self.add_enc:
-            pattern_enc, graph_enc, pattern_e_enc, graph_e_enc = self.get_enc(pattern, graph)
-            if zero_mask is not None:
-                graph_enc.masked_fill_(zero_mask, 0.0)
-            pattern_output = torch.cat([pattern_enc, pattern_output], dim=1)
-            graph_output = torch.cat([graph_enc, graph_output], dim=1)
-        elif self.add_degree:
-            pattern_output = torch.cat([pattern_output, pattern.ndata["indeg"].unsqueeze(-1)], dim=1)
-            graph_output = torch.cat([graph_output, graph.ndata["indeg"].unsqueeze(-1)], dim=1)
-
-        # pred = self.predict_net(pattern_output, pattern_e_len,graph_output, graph_e_len)
-        # return pred
-        pred, alpha, beta = self.predict_net(pattern_output, pattern_e_len, graph_output, graph_e_len)
+        pattern_emb = self.p_net(motif_x, motif_edge_index, motif_edge_attr)
+        graph_output = self.g_net(graph)
+        pred, alpha, beta = self.predict_net(pattern_emb, graph_output)
         filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
         return pred, filmreg

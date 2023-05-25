@@ -549,3 +549,11 @@ def split_and_batchify_graph_feats(batched_graph_feats, graph_sizes):
                 zeros = torch.zeros((max_size - l, dim), dtype=dtype, device=device, requires_grad=False)
                 unbatched_graph_feats[i] = torch.cat([unbatched_graph_feats[i], zeros], dim=0)
         return torch.stack(unbatched_graph_feats, dim=0), mask
+
+def _to_cuda(l):
+    """
+    put a list of tensor to gpu
+    """
+    return [t.cuda() for t in l]
+
+

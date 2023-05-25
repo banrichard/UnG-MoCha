@@ -112,11 +112,7 @@ class FilmSumPredictNet(BasePoolPredictNet):
         torch.nn.init.xavier_uniform_(self.linear_beta2.weight)
         torch.nn.init.zeros_(self.linear_beta2.bias)
 
-    def forward(self, pattern, pattern_len, graph, graph_len):
-        bsz = pattern_len.size(0)
-        p_len, g_len = pattern.size(1), graph.size(1)
-        plf, glf = pattern_len.float(), graph_len.float()
-        inv_plf, inv_glf = 1.0 / plf, 1.0 / glf
+    def forward(self, pattern, graph):
         p = self.drop(self.p_layer(torch.sum(pattern, dim=1, keepdim=True)))
         g = self.drop(self.g_layer(graph))
         _p = p.expand(-1, g.size(1), -1)
@@ -128,10 +124,11 @@ class FilmSumPredictNet(BasePoolPredictNet):
         g = torch.sum(g, dim=1)
         y = self.pred_layer1(
             torch.cat([p, g, g - p, g * p], dim=1))  # W ^T * FCL(x ‖ y ‖ x − y ‖ x \dot y) + b.
-        y = self.act(y) # relu
+        y = self.act(y)  # relu
         y = self.pred_layer2(y)
         # return y
-        return y, alpha, beta
+        filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
+        return y, filmreg
 
 
 class PatternReadout(nn.Module):

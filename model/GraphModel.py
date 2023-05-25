@@ -4,10 +4,12 @@ import torch.nn as nn
 
 from model.Embedding import Embedding
 from model.PredictNet import FilmSumPredictNet
+from utils.utils import get_enc_len, int2onehot
 
 
 class GraphModel(nn.Module):
     def __init__(self, config):
+        # motif_x, motif_edge_index, motif_edge_attr, graph
         super(GraphModel, self).__init__()
         self.act_func = config["activation_function"]
         self.init_emb = config["init_emb"]
@@ -49,8 +51,8 @@ class GraphModel(nn.Module):
         enc.weight.requires_grad = False
         return enc
 
-    def create_emb(self, input_dim, emb_dim, init_emb=False):
-        if init_emb == False:
+    def create_emb(self, input_dim, emb_dim, init_emb=True):
+        if not init_emb:
             emb = None
         else:
             emb = Embedding(input_dim, emb_dim)
@@ -99,6 +101,12 @@ class GraphModel(nn.Module):
             p_e_emb = self.p_el_emb(pattern_e)
             g_e_emb = self.g_el_emb(graph_el)
         return p_emb, g_emb, p_e_emb, g_e_emb
+
+    def get_emb_dim(self):
+        if self.init_emb == "None":
+            return self.get_enc_dim()
+        else:
+            return self.emb_dim, self.emb_dim, self.emb_dim, self.emb_dim
 
     def increase_input_size(self, config):
         super(GraphModel, self).increase_input_size(config)
