@@ -1,25 +1,23 @@
 import torch
 import os
 import numpy as np
-import torch_geometric
 import logging
 import datetime
-import math
 import sys
 import gc
 import json
 import time
 import torch.nn.functional as F
 import warnings
-from functools import partial
-from collections import OrderedDict
 
 from torch.utils.tensorboard import SummaryWriter
-
+from torch_geometric.data import Data
+from graph_converter import Converter
 from model.CountingNet import EdgeMean
-from utils.dataloader import DataLoader
-from utils.motif_processor import QueryPreProcessing, Queryset
-from utils.utils import anneal_fn, _to_cuda
+from motif_processor import QueryPreProcessing, Queryset, _to_datasets
+from utils.utils import anneal_fn, _to_cuda, _to_dataloaders
+from utils.graph_operator import load_graph, k_hop_induced_subgraph, random_walk_on_subgraph, create_batch
+from utils.batch import Batch
 
 warnings.filterwarnings("ignore")
 INF = float("inf")
@@ -34,7 +32,7 @@ train_config = {
     "max_ngel": 8,  # max_number_graph_edge_labels: 16, 64, 256
 
     "base": 2,
-
+    "cuda": True,
     "gpu_id": -1,
     "num_workers": 12,
 
@@ -58,17 +56,17 @@ train_config = {
     "weight_decay_film": 0.00001,
     "max_grad_norm": 8,
 
-    "model": "EdgeMean",  # CNN, RNN, TXL, RGCN, RGIN, RSIN
+    "model": "EDGEMEAN",  # CNN, RNN, TXL, RGCN, RGIN, RSIN
 
     "emb_dim": 128,
     "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
 
-    "predict_net": "SumPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
+    "predict_net": "FilmSumPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
     # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,
     # MeanMemAttnPredictNet, SumMemAttnPredictNet, MaxMemAttnPredictNet,
     # DIAMNet
-    "predict_net_add_enc": True,
-    "predict_net_add_degree": True,
+    "predict_net_add_enc": False,
+    "predict_net_add_degree": False,
     "predict_net_hidden_dim": 128,
     "predict_net_num_heads": 4,
     "predict_net_mem_len": 4,
@@ -92,16 +90,34 @@ train_config = {
     "edgemean_pattern_num_layers": 3,
     "edgemean_hidden_dim": 64,
 
-    "queryset_dir": "/dataset/krogan/queryset",
-    "true_card_dir": "/dataset/krogan/label",
+    "num_g_hid": 128,
+    "num_e_hid": 32,
+    "out_g_ch": 128,
+
+    "graph_num_layers": 4,
+
+    "queryset_dir": "queryset",
+    "true_card_dir": "label",
     "dataset": "krogan",
-    "data_dir": "/dataset",
-    "dataset_name": "krogan_core",
-    "save_res_dir": "/result"
+    "data_dir": "dataset",
+    "dataset_name": "krogan_core.txt",
+    "save_res_dir": "result",
+    "save_model_dir": "saved_model",
+    'init_g_dim': 1
 }
 
 
-def train(model, optimizer, scheduler, data_type, data_loader, device, config, epoch, logger=None, writer=None):
+def data_graph_transform(data_dir, dataset, dataset_name, h=1):
+    graph = load_graph(os.path.join(data_dir, dataset, dataset_name))
+    candidate_sets = {}
+    for node in range(graph.number_of_nodes()):
+        subgraph = k_hop_induced_subgraph(graph, node)
+        candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
+    batch = create_batch(graph, candidate_sets)
+    return batch
+
+
+def train(model, optimizer, scheduler, data_type, data_loader, device, config, epoch, graph, logger=None, writer=None):
     epoch_step = len(data_loader)
     total_step = config["epochs"] * epoch_step
     total_reg_loss = 0
@@ -120,15 +136,25 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
     elif config["bp_loss"] == "SMSE":
         bp_crit = lambda pred, target, neg_slp: F.smooth_l1_loss(F.leaky_relu(pred, neg_slp), target)
     # data preparation
-    graph = torch.load(config['data_dir'] + config['data_set'] + "graph_batch.pt")  # ./dataset/krogan/graph_batch.pt"
+
+    # config['init_pe_dim'] = graph.edge_attr.size(1)
     model.train()
     total_time = 0
     for i, (motif_x, motif_edge_index, motif_edge_attr, card, var) in enumerate(data_loader):
-        if config['cuda']:
-            motif_x, motif_edge_index, motif_edge_attr = \
-                _to_cuda(motif_x), _to_cuda(motif_edge_index), _to_cuda(motif_edge_attr)
-            card, var = card.cuda(), var.cuda()
+        # if config['cuda']:
+        #     motif_x, motif_edge_index, motif_edge_attr = \
+        #         _to_cuda(motif_x), _to_cuda(motif_edge_index), _to_cuda(motif_edge_attr)
+        #     card, var = card.cuda(), var.cuda()
         s = time.time()
+        motif_x.to(device)
+        motif_edge_index.to(device)
+        motif_edge_attr.to(device)
+        card.to(device)
+        var.to(device)
+        # if config['cuda']:
+        #     motif_x, motif_edge_index, motif_edge_attr = \
+        #         _to_cuda(motif_x), _to_cuda(motif_edge_index), _to_cuda(motif_edge_attr)
+        #     card, var = card.cuda(), var.cuda()
         pred, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
         reg_loss = reg_crit(pred, card)
 
@@ -228,77 +254,41 @@ if __name__ == "__main__":
     if train_config["gpu_id"] != -1:
         torch.cuda.set_device(device)
 
-    # reset the pattern parameters
-    if train_config["share_emb"]:
-        train_config["max_npv"], train_config["max_npvl"], train_config["max_npe"], train_config["max_npel"] = \
-            train_config["max_ngv"], train_config["max_ngvl"], train_config["max_nge"], train_config["max_ngel"]
+        # load data
+        # os.makedirs(train_config["save_data_dir"], exist_ok=True)
+    QD = QueryPreProcessing(queryset_dir=train_config["queryset_dir"], true_card_dir=train_config["true_card_dir"],
+                            dataset=train_config["dataset"])
+    # decompose the query
+    QD.decomose_queries()
+    all_subsets = QD.all_queries
 
+    QS = Queryset(dataset_name=train_config['dataset_name'], data_dir=train_config["data_dir"],
+                  dataset=train_config["dataset"], all_queries=all_subsets)
+
+    num_node_feat = QS.num_node_feat
+    num_edge_feat = QS.num_edge_feat
+
+    train_sets, val_sets, test_sets, all_train_sets = QS.train_sets, QS.val_sets, QS.test_sets, QS.all_train_sets
+    # train_datasets = _to_datasets(train_sets)
+    # val_datasets, test_datasets, = _to_datasets(val_sets), _to_datasets(test_sets)
+    train_loaders = QS.train_loaders
+    graph = data_graph_transform(train_config['data_dir'], train_config['dataset'],
+                                 train_config['dataset_name'])  # ./dataset/krogan/graph_batch.pt"
+    # config['init_g_dim'] = graph.x.size(1)
+    # train_config.update({'init_g_dim': graph.x.size(1)})
     # construct the model
 
     if train_config["model"] == "EDGEMEAN":
         model = EdgeMean(train_config)
-        print(model)
-    elif train_config["model"] == "EDGESUM":
-        model = ESUM(train_config)
-    elif train_config["model"] == "EDGESUMS":
-        model = ESUMS(train_config)
+    # elif train_config["model"] == "EDGESUM":
+    #     model = ESUM(train_config)
+    # elif train_config["model"] == "EDGESUMS":
+    #     model = ESUMS(train_config)
     else:
         raise NotImplementedError("Currently, the %s model is not supported" % (train_config["model"]))
     model = model.to(device)
     logger.info(model)
     logger.info("num of parameters: %d" % (sum(p.numel() for p in model.parameters() if p.requires_grad)))
-
-    # load data
-    os.makedirs(train_config["save_data_dir"], exist_ok=True)
-    data_loaders = OrderedDict({"train": None, "dev": None})
-    if all([os.path.exists(os.path.join(train_config["save_data_dir"],
-                                        "%s_%s_dataset.pt" % (
-                                                data_type, "dgl" if train_config["model"] in ["RGCN", "RGIN", "PPN",
-                                                                                              "EDGEMEAN", "EDGESUM",
-                                                                                              "EGATS",
-                                                                                              "EDGESUMS"] else "edgeseq")))
-            for data_type in data_loaders]):
-
-        logger.info("loading data from pt...")
-        for data_type in data_loaders:
-            if train_config["model"] in ["RGCN", "RGIN", "PPN", "EDGEMEAN", "EDGESUM", "EGATS", "EDGESUMS"]:
-                dataset = GraphAdjDataset(list())
-                dataset.load(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-                sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],
-                                  shuffle=data_type == "train", drop_last=False)
-                #      sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],shuffle=False, drop_last=False)
-                data_loader = DataLoader(dataset,
-                                         batch_sampler=sampler,
-                                         collate_fn=GraphAdjDataset.batchify,
-                                         pin_memory=data_type == "train")
-            data_loaders[data_type] = data_loader
-            logger.info("data (data_type: {:<5s}, len: {}) generated".format(data_type, len(dataset.data)))
-            logger.info(
-                "data_loader (data_type: {:<5s}, len: {}, batch_size: {}) generated".format(data_type, len(data_loader),
-                                                                                            train_config["batch_size"]))
-    else:
-        data = load_data(train_config["graph_dir"], train_config["pattern_dir"], train_config["metadata_dir"],
-                         num_workers=train_config["num_workers"])
-        logger.info("{}/{}/{} data loaded".format(len(data["train"]), len(data["dev"]), len(data["test"])))
-        for data_type, x in data.items():
-            if train_config["model"] in ["RGCN", "RGIN", "PPN", "EDGEMEAN", "EDGESUM", "EGATS", "EDGESUMS"]:
-                if os.path.exists(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type))):
-                    dataset = GraphAdjDataset(list())
-                    dataset.load(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-                else:
-                    dataset = GraphAdjDataset(x)
-                    dataset.save(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-                sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],
-                                  shuffle=data_type == "train", drop_last=False)
-                data_loader = DataLoader(dataset,
-                                         batch_sampler=sampler,
-                                         collate_fn=GraphAdjDataset.batchify,
-                                         pin_memory=data_type == "train")
-            data_loaders[data_type] = data_loader
-            logger.info("data (data_type: {:<5s}, len: {}) generated".format(data_type, len(dataset.data)))
-            logger.info(
-                "data_loader (data_type: {:<5s}, len: {}, batch_size: {}) generated".format(data_type, len(data_loader),
-                                                                                            train_config["batch_size"]))
 
     # optimizer and losses
     writer = SummaryWriter(save_model_dir)
@@ -315,72 +305,71 @@ if __name__ == "__main__":
     total_dev_time = 0
     total_test_time = 0
     for epoch in range(train_config["epochs"]):
-        for data_type, data_loader in data_loaders.items():
+        for loader_idx, dataloader in enumerate(train_loaders):
 
-            if data_type == "train":
-                mean_reg_loss, mean_bp_loss, _time = train(model, optimizer, scheduler, data_type, data_loader, device,
-                                                           train_config, epoch, logger=logger, writer=writer)
-                total_train_time += _time
-                torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
-            if mean_reg_loss <= best_reg_losses[data_type]:
-                best_reg_losses[data_type] = mean_reg_loss
-                best_reg_epochs[data_type] = epoch
+            mean_reg_loss, mean_bp_loss, _time = train(model, optimizer, scheduler, loader_idx, dataloader, device,
+                                                       train_config, epoch, graph, logger=logger, writer=writer)
+            total_train_time += _time
+            torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
+            if mean_reg_loss <= best_reg_losses[loader_idx]:
+                best_reg_losses[loader_idx] = mean_reg_loss
+                best_reg_epochs[loader_idx] = epoch
                 logger.info(
-                    "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(data_type, mean_reg_loss,
+                    "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(loader_idx, mean_reg_loss,
                                                                                         epoch))
-    for data_type in data_loaders.keys():
+    for loader_idx in train_loaders.keys():
         logger.info(
-            "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(data_type, best_reg_losses[data_type],
-                                                                                best_reg_epochs[data_type]))
+            "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(loader_idx, best_reg_losses[loader_idx],
+                                                                                best_reg_epochs[loader_idx]))
     # _________________________________________________________________________________________________________________
-    best_epoch = best_reg_epochs["dev"]
-
-    data_loaders = OrderedDict({"test": None})
-    if all([os.path.exists(os.path.join(train_config["save_data_dir"],
-                                        "%s_%s_dataset.pt" % (
-                                                data_type, "dgl" if train_config["model"] in ["RGCN", "RGIN", "PPN",
-                                                                                              "EDGEMEAN", "EDGESUM",
-                                                                                              "EGATS",
-                                                                                              "EDGESUMS"] else "edgeseq")))
-            for data_type in data_loaders]):
-
-        logger.info("loading data from pt...")
-        for data_type in data_loaders:
-            if train_config["model"] in ["RGCN", "RGIN", "PPN", "EDGEMEAN", "EDGESUM", "EGATS", "EDGESUMS"]:
-                dataset = GraphAdjDataset(list())
-                dataset.load(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-                sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],
-                                  shuffle=data_type == "train", drop_last=False)
-                data_loader = DataLoader(dataset,
-                                         batch_sampler=sampler,
-                                         collate_fn=GraphAdjDataset.batchify,
-                                         pin_memory=data_type == "train")
-            data_loaders[data_type] = data_loader
-            logger.info("data (data_type: {:<5s}, len: {}) generated".format(data_type, len(dataset.data)))
-            logger.info(
-                "data_loader (data_type: {:<5s}, len: {}, batch_size: {}) generated".format(data_type, len(data_loader),
-                                                                                            train_config["batch_size"]))
-    else:
-        data = load_data(train_config["graph_dir"], train_config["pattern_dir"], train_config["metadata_dir"],
-                         num_workers=train_config["num_workers"])
-        logger.info("{}/{}/{} data loaded".format(len(data["train"]), len(data["dev"]), len(data["test"])))
-        for data_type, x in data.items():
-            if train_config["model"] in ["RGCN", "RGIN", "PPN", "EDGEMEAN", "EDGESUM", "EGATS", "EDGESUMS"]:
-                if os.path.exists(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type))):
-                    dataset = GraphAdjDataset(list())
-                    dataset.load(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-                else:
-                    dataset = GraphAdjDataset(x)
-                    dataset.save(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-                sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],
-                                  shuffle=data_type == "train", drop_last=False)
-                data_loader = DataLoader(dataset,
-                                         batch_sampler=sampler,
-                                         collate_fn=GraphAdjDataset.batchify,
-                                         pin_memory=data_type == "train")
-            data_loaders[data_type] = data_loader
-            logger.info("data (data_type: {:<5s}, len: {}) generated".format(data_type, len(dataset.data)))
-            logger.info(
-                "data_loader (data_type: {:<5s}, len: {}, batch_size: {}) generated".format(data_type, len(data_loader),
-                                                                                            train_config["batch_size"]))
+    # best_epoch = best_reg_epochs["dev"]
+    #
+    # data_loaders = OrderedDict({"test": None})
+    # if all([os.path.exists(os.path.join(train_config["save_data_dir"],
+    #                                     "%s_%s_dataset.pt" % (
+    #                                             data_type, "dgl" if train_config["model"] in ["RGCN", "RGIN", "PPN",
+    #                                                                                           "EDGEMEAN", "EDGESUM",
+    #                                                                                           "EGATS",
+    #                                                                                           "EDGESUMS"] else "edgeseq")))
+    #         for data_type in data_loaders]):
+    #
+    #     logger.info("loading data from pt...")
+    #     for data_type in data_loaders:
+    #         if train_config["model"] in ["RGCN", "RGIN", "PPN", "EDGEMEAN", "EDGESUM", "EGATS", "EDGESUMS"]:
+    #             dataset = GraphAdjDataset(list())
+    #             dataset.load(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
+    #             sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],
+    #                               shuffle=data_type == "train", drop_last=False)
+    #             data_loader = DataLoader(dataset,
+    #                                      batch_sampler=sampler,
+    #                                      collate_fn=GraphAdjDataset.batchify,
+    #                                      pin_memory=data_type == "train")
+    #         data_loaders[data_type] = data_loader
+    #         logger.info("data (data_type: {:<5s}, len: {}) generated".format(data_type, len(dataset.data)))
+    #         logger.info(
+    #             "data_loader (data_type: {:<5s}, len: {}, batch_size: {}) generated".format(data_type, len(data_loader),
+    #                                                                                         train_config["batch_size"]))
+    # else:
+    #     data = load_data(train_config["graph_dir"], train_config["pattern_dir"], train_config["metadata_dir"],
+    #                      num_workers=train_config["num_workers"])
+    #     logger.info("{}/{}/{} data loaded".format(len(data["train"]), len(data["dev"]), len(data["test"])))
+    #     for data_type, x in data.items():
+    #         if train_config["model"] in ["RGCN", "RGIN", "PPN", "EDGEMEAN", "EDGESUM", "EGATS", "EDGESUMS"]:
+    #             if os.path.exists(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type))):
+    #                 dataset = GraphAdjDataset(list())
+    #                 dataset.load(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
+    #             else:
+    #                 dataset = GraphAdjDataset(x)
+    #                 dataset.save(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
+    #             sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],
+    #                               shuffle=data_type == "train", drop_last=False)
+    #             data_loader = DataLoader(dataset,
+    #                                      batch_sampler=sampler,
+    #                                      collate_fn=GraphAdjDataset.batchify,
+    #                                      pin_memory=data_type == "train")
+    #         data_loaders[data_type] = data_loader
+    #         logger.info("data (data_type: {:<5s}, len: {}) generated".format(data_type, len(dataset.data)))
+    #         logger.info(
+    #             "data_loader (data_type: {:<5s}, len: {}, batch_size: {}) generated".format(data_type, len(data_loader),
+    #                                                                                         train_config["batch_size"]))
     print("data finish")

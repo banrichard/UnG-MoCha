@@ -18,9 +18,10 @@ class QueryPreProcessing(object):
 		"""
         self.queryset = queryset_dir
         self.dataset = dataset
-        self.queryset_load_path = os.path.join("dataset", dataset, self.queryset)
+        self.data_dir = "dataset"
+        self.queryset_load_path = os.path.join(self.data_dir, self.dataset, self.queryset)
         self.true_card_dir = true_card_dir
-        self.true_card_load_path = os.path.join("dataset", dataset, self.true_card_dir)
+        self.true_card_load_path = os.path.join(self.data_dir, self.dataset, self.true_card_dir)
         self.num_queries = 0
         self.all_subsets = {}  # {(size, patten) -> [(decomp_graphs, true_card]}
         # preserve the undecomposed queries
@@ -136,7 +137,7 @@ class Queryset(object):
         self.num_queries = 0
         self.graph = load_graph(
             os.path.join(self.data_dir, self.dataset,
-                         self.dataset_name) + ".txt")  # "../dataset/krogan/krogan_core.txt"
+                         self.dataset_name))  # "../dataset/krogan/krogan_core.txt"
         self.node_label_card, self.edge_label_card = self.get_label_card(self.graph)
         self.node_label_fre = 0
         self.edge_label_fre = 0
@@ -186,7 +187,7 @@ class Queryset(object):
         edge_index = None
         edge_attr = None
         node_attr = self._get_nodes_attr_freq(motif)
-        edge_index, edge_attr = self._get_edges_index_freq(motif)
+        edge_index, edge_attr = self._get_edge_weight_freq(motif)
         x = node_attr
         return x, edge_index, edge_attr
 

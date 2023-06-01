@@ -6,16 +6,19 @@ from multiprocessing import Pool
 
 import pandas as pd
 import torch
+import torch.nn.functional as F
+
 from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.data import DataLoader
 from torch_geometric.data import Data
-from torch_geometric.utils import to_scipy_sparse_matrix, to_networkx
+from torch_geometric.utils import to_scipy_sparse_matrix, to_networkx, degree
 from collections import defaultdict, OrderedDict
 import scipy.sparse as ssp
 import numpy as np
 import networkx as nx
 from tqdm import tqdm
 
-from .batch import Batch
+from utils.batch import Batch
 
 
 def nodes_to_subgraphs(data):
@@ -51,53 +54,99 @@ def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
     if type(h) == int:
         h = [h]
     assert (isinstance(data, Data))
-    # TODO: modify the data obtaining
-    edge_index, num_nodes, edge_attr = data.edge_index, data.num_nodes, data.edge_attr
-    new_data_multi_hop = {}
-    # traverse the h-hop neighbors
+    x, edge_index, num_nodes = data.x, data.edge_index, data.num_nodes
+    if type(data.num_nodes) is torch.Tensor:
+        num_nodes = num_nodes.item()
+    edge_attr = data.edge_attr
     for h_ in h:
         subgraphs = []
-        for ind in range(num_nodes):
-            nodes_, edge_index_, edge_mask_ = new_k_hop_rw(ind, h_, edge_index, edge_attr, subs=1)
-            # node_set = set()
-            # subgraph_edge_index = candidate_set.edge_index
-            # for i in range(len(subgraph_edge_index)):
-            #     for j in range(len(subgraph_edge_index[0])):
-            #         node_set.add(subgraph_edge_index[i][j])
+        for e in edge_index.T:
+            nodes_0, edge_index_0, edge_mask_0, z_0 = k_hop_subgraph(
+                e[0], h_, edge_index, False, num_nodes, node_label='hop',
+                max_nodes_per_hop=max_nodes_per_hop
+            )
+            nodes_1, edge_index_1, edge_mask_1, z_1 = k_hop_subgraph(
+                e[1], h_, edge_index, False, num_nodes, node_label='hop',
+                max_nodes_per_hop=max_nodes_per_hop
+            )
+            nodes_ = [nodes_0[0], nodes_1[0]]
+            nodes_ = nodes_ + [item for item in nodes_0 if item not in nodes_]
+            nodes_ = nodes_ + [item for item in nodes_1 if item not in nodes_]
+            edge_mask_ = torch.logical_or(edge_mask_0, edge_mask_1)
+            z_ = []
+            for n in nodes_:
+                d0 = z_0[n] if n in z_0 else h_ + 1
+                d1 = z_1[n] if n in z_1 else h_ + 1
+                z_.append([d0, d1])
+            z_ = torch.tensor(z_).to(edge_index.device)
+            nodes_ = torch.tensor(nodes_).to(edge_index.device)
+            edge_index_ = edge_index[:, edge_mask_]
+            # relabel nodes
+            node_idx = edge_index[1].new_full((num_nodes,), -1)
+            node_idx[nodes_] = torch.arange(nodes_.size(0), device=edge_index.device)
+            edge_index_ = node_idx[edge_index_]
 
-            # nodes_ = torch.tensor(list(node_set))
-            edge_attr_ = data.edge_attr[edge_mask_]
-            data_ = Data(edge_index=edge_index_, edge_attr=edge_attr_)
+            x_ = None
+            edge_attr_ = None
+            pos_ = None
+            if x is not None:
+                x_ = x[nodes_]
+            else:
+                x_ = None
+
+            if 'node_type' in data:
+                node_type_ = data.node_type[nodes_]
+
+            if data.edge_attr is not None:
+                edge_attr_ = edge_attr[edge_mask_]
+            if data.pos is not None:
+                pos_ = data.pos[nodes_]
+            data_ = data.__class__(x_, edge_index_, edge_attr_, None, pos_, z=z_)
+            data_.num_nodes = nodes_.shape[0]
+            data_.sub_degree = degree(edge_index_[0], num_nodes=nodes_.shape[0])
+            data_.original_idx = nodes_
+
+            if 'node_type' in data:
+                data_.node_type = node_type_
+
             subgraphs.append(data_)
 
-        # new_data is treated as a big disconnected graph of the batch of subgraphs
-        new_data = Batch.from_data_list(subgraphs)
-        # the sum of nodes in each subgraph
-        new_data.num_nodes = sum(data_.num_nodes for data_ in subgraphs)
-        new_data.num_subgraphs = len(subgraphs)
+        pos_encs = []
+        pos_indices = []
+        pos_batches = []
+        cnt_batch = 0
+        for sg in subgraphs:
+            # encodes the distance and degree information of nodes within the subgraph
+            lsg = sg.num_nodes
+            pos_enc = torch.cat((F.one_hot(sg.sub_degree.long(), num_classes=200).view(lsg, -1),
+                                 F.one_hot(sg.z.long(), num_classes=100).view(lsg, -1)), dim=-1)
+            pos_enc = pos_enc.sum(dim=0)
 
-        new_data.original_edge_index = edge_index
-        new_data.original_edge_attr = data.edge_attr
-        new_data.original_pos = data.pos
+            # encodes the edge information within the subgraph
+            # wrong version, cannot count number of edges of certain type
+            # pos_enc = torch.cat((pos_enc, F.one_hot(sg.z[sg.edge_index].transpose(0, 1).reshape(-1, 4), num_classes=100).view(-1,400).sum(dim=0)))
+            pos_enc = torch.cat((pos_enc,
+                                 F.one_hot((sg.z[remove_self_loops(sg.edge_index)[0]].transpose(0, 1).reshape(-1,
+                                                                                                              4)) @ torch.tensor(
+                                     [216, 36, 6, 1]), num_classes=1300).sum(dim=0)))
+            # pos_encs.append(pos_enc.unsqueeze(0))#.to_sparse())
+            pos_index = torch.nonzero(pos_enc)
+            pos_encs.append(pos_enc[pos_index].view(-1))
+            pos_indices.append(pos_index.view(-1))
+            pos_batches.append(torch.LongTensor([cnt_batch for _ in range(pos_index.size()[0])]))
+            cnt_batch += 1
 
-        # rename batch, because batch will be used to store node_to_graph assignment
-        new_data.node_to_subgraph = new_data.batch
-        del new_data.batch
-        # create a subgraph_to_graph assignment vector (all zero)
-        new_data.subgraph_to_graph = torch.zeros(len(subgraphs), dtype=torch.long)
-
-        # copy remaining graph attributes
-        for k, v in data:
-            if k not in ['x', 'edge_index', 'edge_attr', 'pos', 'num_nodes', 'batch',
-                         'z', 'rd', 'node_type']:
-                new_data[k] = v
-
-        if len(h) == 1:
-            return new_data
+        if not hasattr(data, 'pos'):
+            new_data = data.__class__(data.x, edge_index, edge_attr, data.y, None, pos_enc=torch.cat(pos_encs, dim=0),
+                                      pos_index=torch.cat(pos_indices, dim=0), pos_batch=torch.cat(pos_batches, dim=0))
+        elif not hasattr(data, 'name'):
+            new_data = data.__class__(data.x, edge_index, edge_attr, data.y, None, pos_enc=torch.cat(pos_encs, dim=0),
+                                      pos_index=torch.cat(pos_indices, dim=0), pos_batch=torch.cat(pos_batches, dim=0))
         else:
-            new_data_multi_hop[h_] = new_data
-
-    return new_data_multi_hop
+            new_data = data.__class__(data.x, edge_index, edge_attr, data.y, pos=data.pos,
+                                      pos_enc=torch.cat(pos_encs, dim=0), pos_index=torch.cat(pos_indices, dim=0),
+                                      pos_batch=torch.cat(pos_batches, dim=0), name=data.name, node_type=data.node_type)
+    return new_data
 
 
 # TODO: modify this function to get TOP-K subgraphs of each node
@@ -452,103 +501,6 @@ def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
-def load_data(graph_dir, pattern_dir, num_workers=4):
-    patterns = read_patterns_from_dir(pattern_dir, num_workers=num_workers)
-    graphs = read_graphs_from_dir(graph_dir, num_workers=num_workers)
-
-    train_data, dev_data, test_data = list(), list(), list()
-    train_count = 0
-    dev_count = 0
-    train_length = 5000
-    dev_length = 500
-    num = 0
-    for p, pattern in patterns.items():
-        if p in graphs:
-            for g, graph in graphs[p].items():
-                x = dict()
-                x["id"] = ("%s-%s" % (p, g))
-                x["pattern"] = pattern
-                x["graph"] = graph
-                g_idx = int(g.rsplit("_", 1)[-1])
-
-                if num % 100 == 0 and train_count < train_length:
-                    train_data.append(x)
-                    train_count += 1
-                elif num % 100 == 1 and dev_count < dev_length:
-                    dev_data.append(x)
-                    dev_count += 1
-                else:
-                    test_data.append(x)
-                num += 1
-        elif len(graphs) == 1 and "raw" in graphs.keys():
-            for g, graph in graphs["raw"].items():
-                x = dict()
-                x["id"] = ("%s-%s" % (p, g))
-                x["pattern"] = pattern
-                x["graph"] = graph
-                g_idx = int(g.rsplit("_", 1)[-1])
-                if g_idx % 3 == 0:
-                    dev_data.append(x)
-                elif g_idx % 3 == 1:
-                    test_data.append(x)
-                else:
-                    train_data.append(x)
-    return OrderedDict({"train": train_data, "dev": dev_data, "test": test_data})
-
-
-def read_graphs_from_dir(dirpath, num_workers=4):
-    graphs = dict()
-    subdirs = _get_subdirs(dirpath)
-    with Pool(num_workers if num_workers > 0 else os.cpu_count()) as pool:
-        results = list()
-        for subdir in subdirs:
-            results.append((subdir, pool.apply_async(_read_graphs_from_dir, args=(subdir,))))
-        pool.close()
-
-        for subdir, x in tqdm(results):
-            x = x.get()
-            graphs[os.path.basename(subdir)] = x
-    return graphs
-
-
-def read_patterns_from_dir(dirpath, num_workers=4):
-    patterns = dict()
-    subdirs = _get_subdirs(dirpath)
-    with Pool(num_workers if num_workers > 0 else os.cpu_count()) as pool:
-        results = list()
-        for subdir in subdirs:
-            results.append((subdir, pool.apply_async(_read_graphs_from_dir, args=(subdir,))))
-        pool.close()
-
-        for subdir, x in tqdm(results):
-            x = x.get()
-            patterns.update(x)
-            # patterns[os.path.basename(subdir)] = x
-    return patterns
-
-
-def split_and_batchify_graph_feats(batched_graph_feats, graph_sizes):
-    bsz = graph_sizes.size(0)
-    dim, dtype, device = batched_graph_feats.size(-1), batched_graph_feats.dtype, batched_graph_feats.device
-
-    min_size, max_size = graph_sizes.min(), graph_sizes.max()
-    mask = torch.ones((bsz, max_size), dtype=torch.uint8, device=device, requires_grad=False)
-
-    if min_size == max_size:
-        return batched_graph_feats.view(bsz, max_size, -1), mask
-    else:
-        graph_sizes_list = graph_sizes.view(-1).tolist()
-        unbatched_graph_feats = list(torch.split(batched_graph_feats, graph_sizes_list, dim=0))
-        for i, l in enumerate(graph_sizes_list):
-            if l == max_size:
-                continue
-            elif l > max_size:
-                unbatched_graph_feats[i] = unbatched_graph_feats[i][:max_size]
-            else:
-                mask[i, l:].fill_(0)
-                zeros = torch.zeros((max_size - l, dim), dtype=dtype, device=device, requires_grad=False)
-                unbatched_graph_feats[i] = torch.cat([unbatched_graph_feats[i], zeros], dim=0)
-        return torch.stack(unbatched_graph_feats, dim=0), mask
 
 def _to_cuda(l):
     """
@@ -557,3 +509,12 @@ def _to_cuda(l):
     return [t.cuda() for t in l]
 
 
+def _to_dataloaders(datasets, batch_size=1, shuffle=True):
+    """
+    create a lists of torch dataloader from datasets
+    """
+
+    dataloaders = [DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
+                   for dataset in datasets] if isinstance(datasets, list) \
+        else [DataLoader(dataset=datasets, batch_size=batch_size, shuffle=shuffle)]
+    return dataloaders

@@ -27,7 +27,7 @@ class Batch(Data):
         Additionally, creates assignment batch vectors for each key in
         :obj:`follow_batch`."""
 
-        keys = [set(data.keys) for data in data_list]
+        keys = [set(data.keys) for data in data_list] # get x, edge_idx, edge_attr
         keys = list(set.union(*keys))
         assert 'batch' not in keys
 
@@ -47,12 +47,12 @@ class Batch(Data):
         # data_list = [subgraph for _, subgraph in sorted(zip(sizes, data_list), reverse=True)]
         # sizes.sort(reverse=True)
         for i, data in enumerate(data_list):
-            for key in data.keys:
+            for key in data.keys: # x,edge_idx,edge_attr
                 item = data[key]
                 if torch.is_tensor(item) and item.dtype != torch.bool:
                     item = item + cumsum[key]
                 if torch.is_tensor(item):
-                    size = item.size(data.__cat_dim__(key, data[key]))
+                    size = item.size(data.__cat_dim__(key, data[key])) # item.size(0) = 17
                 else:
                     size = 1
                 batch.__slices__[key].append(size + batch.__slices__[key][-1])

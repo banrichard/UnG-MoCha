@@ -6,10 +6,12 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
+import torch_geometric.utils
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import from_networkx
-from batch import Batch
+from utils.batch import Batch
+import torch.nn.functional as F
 
 
 # from dataloader import DataLoader
@@ -45,7 +47,7 @@ def k_hop_induced_subgraph(graph, src, k=1):
             break
     subgraph = nx.subgraph(graph, nodes_list).copy()
 
-    return subgraph.copy()
+    return subgraph
 
 
 def candidate_filter(candidate_set):
@@ -101,40 +103,35 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
     if emb_path is not None:
         x = torch.from_numpy(np.loadtxt(emb_path, delimiter=" ")[:, 1:])
     else:
-        x = torch.ones([graph.number_of_nodes(), 1])
-    edge_index = torch.tensor(list(graph.edges)).t().contiguous()
-    edge_attr = torch.tensor([dict(graph[u][v])['prob'] for u, v in graph.edges]).view(-1, 1).contiguous()
-    pyg_graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+        x = torch.zeros(len(graph.nodes), 1)
+        degree = list(graph.degree)
+        for i in range(len(degree)):
+            x[i] = degree[i][1]
+
+        # x = torch.ones([graph.number_of_nodes(), 1])
+        # x = nx.to_numpy_array(graph,weight='prob')
+        # x = torch.from_numpy(x)
+
+    pyg_graph = torch_geometric.utils.from_networkx(graph)
+
     # get the corresponding subgraph(s) of each node in the graph
     # for now we randomly select a subgraph (2023.5.15 21:30)
     pyg_subgraphs = []
     for node in range(graph.number_of_nodes()):
         subgraph = candidate_sets[node]
-        # if subgraph.number_of_edges() != 0:
-        sub_edge_index = torch.tensor(list(subgraph.edges)).t().contiguous()
-        sub_edge_attr = torch.tensor([dict(subgraph[u][v])['prob'] for u, v in subgraph.edges]).view(-1,
-                                                                                                     1).contiguous()
-        sub_x = x[list(subgraph.nodes()), :]
-        pyg_subgraph = Data(x=sub_x, edge_index=sub_edge_index, edge_attr=sub_edge_attr)
-        # pyg_subgraph = from_networkx(subgraph, group_edge_attrs=['prob'])
-
-        # for n in subgraph.nodes():
-        #     subgraph.add_node(n,idx = n)
-        # else:
-        #     # pyg_subgraph = Data(x = torch.tensor())
-        #     pyg_subgraph = from_networkx(subgraph)
-        # add attributes to the subgraph
-
+        pyg_subgraph = torch_geometric.utils.from_networkx(subgraph)
         pyg_subgraphs.append(pyg_subgraph)
     pyg_batch = Batch.from_data_list(pyg_subgraphs)
+
+    pyg_batch.edge_index = torch.LongTensor(pyg_batch.edge_index)
     pyg_batch.num_nodes = sum(data_.num_nodes for data_ in pyg_subgraphs)
     pyg_batch.num_subgraphs = len(pyg_subgraphs)
 
-    pyg_batch.original_edge_index = edge_index
-    pyg_batch.original_edge_attr = edge_attr
+    pyg_batch.original_edge_index = pyg_graph.edge_index
+    pyg_batch.original_edge_attr = pyg_graph.edge_attr
     pyg_batch.node_to_subgraph = pyg_batch.batch
     del pyg_batch.batch
-    pyg_batch.subgraph_to_graph = torch.zeros(len(pyg_batch), dtype=torch.long)
+    pyg_batch.subgraph_to_graph = torch.zeros(len(pyg_subgraphs), dtype=torch.long)
     return pyg_batch
 
 
@@ -152,12 +149,12 @@ if __name__ == "__main__":
     end_time = time.time()
     # torch.save(batch,"../dataset/krogan/graph_batch.pt")
     print("running time of batch creation is {}s".format(end_time - start_time))
-    batch.to_data_list()
 
-# print(candidate_sets[0].edges)
-# print(len(candidate_sets[0].edges))
-# batch = torch.load("../dataset/krogan/graph_batch.pt")
-#
-# loader = DataLoader(batch,batch_size=1,shuffle=False)
-# #
-# batch = next(iter(loader))
+    # print(candidate_sets[0].edges)
+    # print(len(candidate_sets[0].edges))
+    batch = torch.load("../model/graph_batch.pt")
+    print(batch)
+    #
+    loader = DataLoader(batch, batch_size=1, shuffle=False)
+    #
+    batch = next(iter(loader))

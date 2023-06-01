@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
 
+from model.Embedding import Embedding
+from utils.batch import Batch
 from model.GraphModel import GraphModel
 from model.HUGNN import NestedGIN
 from model.motifNet import MotifGNN
-from PredictNet import PatternReadout, GraphReadout
 
 
 def split_batch(index, input, length, max):
@@ -22,16 +23,18 @@ class EdgeMean(GraphModel):
         # create networks
         # embed the node features and edge features
         p_emb_dim, g_emb_dim, p_e_emb_dim, g_e_emb_dim = self.get_emb_dim()
+        # self.pre_g_enc = Embedding(config['init_g_dim'], g_emb_dim)
         # TODO: modify create_net to adapt the NNGIN and NestedGIN
         self.g_net, g_dim = self.create_graph_net(
-            input_dim=g_emb_dim * 3, hidden_dim=config["num_g_hid"],
+            hidden_dim=config["num_g_hid"],
             num_layers=config["graph_num_layers"], num_e_hid=128,
-            dropout=self.dropout, model_type="GIN", bsz=config["batch_size"])
+            dropout=self.dropout, model_type="GIN")
 
         self.p_net, p_dim = self.create_pattern_net(
-            name="pattern", input_dim=p_emb_dim * 3, hidden_dim=config["ppn_hidden_dim"],
-            num_layers=config["ppn_pattern_num_layers"], act_func=self.act_func,
-            dropout=self.dropout, bsz=config["batch_size"])
+            name="pattern", input_dim=p_emb_dim, hidden_dim=config["ppn_hidden_dim"],
+            num_edge_feat=p_e_emb_dim,
+            num_layers=config["ppn_pattern_num_layers"],
+            dropout=self.dropout)
         # create predict layers
 
         if self.add_enc:
@@ -49,16 +52,16 @@ class EdgeMean(GraphModel):
         self.p_linear = torch.nn.Linear(p_emb_dim * 3, config["ppn_hidden_dim"])
         self.config = config
 
-    def create_graph_net(self, input_dim, **kwargs):
-        num_layers = kwargs.get("num_layers", 1)
+    def create_graph_net(self, input_dim=1, **kwargs):
+        num_layers = kwargs.get("num_layers", 3)
         hidden_dim = kwargs.get("num_g_hid", 128)
         e_hidden_dim = kwargs.get("num_e_hid", 128)
         dropout = kwargs.get("dropout", 0.2)
-        model_type = kwargs.get("model_type", "GIN")
+        model_type = kwargs.get("model_type", "GINE")
+        out_dim = kwargs.get("out_dim", 64)
         net = NestedGIN(num_layers=num_layers, input_dim=input_dim, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim,
-                        model_type=model_type,
-                        dropout=dropout)
-        return net, hidden_dim
+                        model_type=model_type, out_dim=out_dim, dropout=dropout)
+        return net, out_dim
 
     def create_pattern_net(self, input_dim, **kwargs):
         # num_layers, num_g_hid, num_e_hid, out_g_ch, model_type, dropout
@@ -66,12 +69,14 @@ class EdgeMean(GraphModel):
         hidden_dim = kwargs.get("num_g_hid", 128)
         e_hidden_dim = kwargs.get("num_e_hid", 128)
         dropout = kwargs.get("dropout", 0.2)
-        model_type = kwargs.get("model_type", "NNGINConcat")
+        model_type = kwargs.get("model_type", "GCN")
         output_dim = kwargs.get("out_g_ch", 64)
+        num_node_feat = kwargs.get("num_node_feat", 1)
         num_edge_feat = kwargs.get("num_edge_feat", 1)
         net = MotifGNN(num_layers=num_layers, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim, dropout=dropout,
-                       model_type=model_type, out_g_ch=output_dim, num_edge_feat=num_edge_feat, num_node_feat=input_dim)
-        return net, hidden_dim
+                       model_type=model_type, out_g_ch=output_dim, num_edge_feat=num_edge_feat,
+                       num_node_feat=num_node_feat)
+        return net, output_dim
 
     def GraphEmbedding(self, g_vl_emb, g_el_emb, adj):
         u = g_vl_emb[adj[0]]
@@ -94,10 +99,13 @@ class EdgeMean(GraphModel):
     def forward(self, motif_x, motif_edge_index, motif_edge_attr, graph):
         zero_mask = None
 
-        p_emb, g_vl_emb, p_el_emb, g_el_emb = self.get_emb(motif_edge_attr, graph)
+        # p_el_emb, g_el_emb = self.get_emb(motif, graph)
 
         # graph_output.masked_fill_(zero_output_mask, 0.0)
         # graph_output = graph_output.resize(graph_output.size(0) * graph_output.size(1), graph_output.size(2))
+        # x = graph.x.to(torch.float32)
+        # x = self.pre_g_enc(x)
+        # graph.x = x
         pattern_emb = self.p_net(motif_x, motif_edge_index, motif_edge_attr)
         graph_output = self.g_net(graph)
         pred, alpha, beta = self.predict_net(pattern_emb, graph_output)

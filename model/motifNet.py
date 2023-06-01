@@ -87,7 +87,7 @@ class NNGINConcatConv(MessagePassing):
             x: OptPairTensor = (x, x)
 
         # propagate_type: (x: OptPairTensor, edge_attr: OptTensor)
-        out = self.propagate(edge_index, x=x, edge_attr=edge_attr, size=size)
+        out = self.propagate(edge_index=edge_index, x=x, edge_attr=edge_attr, size=size)
 
         out = self.node_nn(out)
         # print(out.shape)
@@ -103,8 +103,8 @@ class NNGINConcatConv(MessagePassing):
 
 
 class MotifGNN(nn.Module):
-    def __init__(self, num_layers, num_g_hid, num_e_hid, out_g_ch, model_type, dropout, num_node_feat,
-                 num_edge_feat):
+    def __init__(self, num_layers, num_g_hid, num_e_hid, out_g_ch, model_type, dropout, num_node_feat=1,
+                 num_edge_feat=1, inter_hid=64):
         super(MotifGNN, self).__init__()
         self.num_node_feat = num_node_feat
         self.num_edge_feat = num_edge_feat
@@ -112,10 +112,11 @@ class MotifGNN(nn.Module):
         self.num_hid = num_g_hid
         self.num_e_hid = num_e_hid
         self.num_out = out_g_ch
+        self.inter_hid = inter_hid
         self.model_type = model_type
         self.dropout = dropout
         self.convs = nn.ModuleList()
-        self.agg = nn.Linear(1, self.num_out, bias=False)
+        self.agg = nn.Linear(self.num_out, self.inter_hid, bias=False)
         cov_layer = self.build_cov_layer(self.model_type)
 
         for l in range(self.num_layers):
@@ -126,8 +127,6 @@ class MotifGNN(nn.Module):
                     or self.model_type == "SAGE" or self.model_type == "GCN" \
                     or self.model_type == "DNA" or self.model_type == "Graph":
                 self.convs.append(cov_layer(hidden_input_dim, hidden_output_dim))
-            elif self.model_type == "GCN2":
-                self.convs.append(cov_layer(hidden_input_dim, alpha=0.1))
             elif self.model_type == "FA":
                 self.convs.append(cov_layer(hidden_input_dim, normalize=False))
             elif self.model_type == "NN" or self.model_type == "NNGIN" or self.model_type == "NNGINConcat":
@@ -171,6 +170,7 @@ class MotifGNN(nn.Module):
         torch.nn.init.xavier_uniform_(self.agg.weight)
 
     def forward(self, x, edge_index, edge_attr=None):
+        x, edge_index, edge_attr = x.squeeze(0), edge_index.squeeze(0), edge_attr.squeeze(0)
         if self.model_type == 'FA' or self.model_type == 'GCN2':
             x_0 = x
         else:
@@ -184,7 +184,7 @@ class MotifGNN(nn.Module):
             elif self.model_type == "FA" or self.model_type == "GCN2":
                 x = self.convs[i](x, x_0, edge_index, edge_weight=edge_attr)
             elif self.model_type == "NN" or self.model_type == "NNGIN" or self.model_type == "NNGINConcat":
-                x = self.convs[i](x, edge_index, edge_attr=edge_attr)
+                x = self.convs[i](x=x, edge_index=edge_index, edge_attr=edge_attr)
             else:
                 print("Unsupported model type!")
 

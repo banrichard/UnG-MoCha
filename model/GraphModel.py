@@ -37,7 +37,9 @@ class GraphModel(nn.Module):
                                                       self.max_npel]]
 
         # create embedding layers
+        self.g_v_emb = self.create_emb(self.g_v_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
         self.g_el_emb = self.create_emb(self.g_el_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
+
         self.p_el_emb = self.create_emb(self.p_el_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
 
         # create networks
@@ -69,15 +71,15 @@ class GraphModel(nn.Module):
 
     def get_enc(self, pattern, graph):
 
-        pattern_v = self.p_v_enc(pattern.ndata["id"])
-        pattern_e, pattern_el = self.p_e_enc(pattern.edata["id"]), self.p_el_enc(pattern.edata["label"])
-        graph_v = self.g_v_enc(graph.ndata["id"])
-        graph_e, graph_el = self.g_e_enc(graph.edata["id"]), self.g_el_enc(graph.edata["label"])
+        pattern_v = self.p_v_enc(pattern.x)
+        pattern_el = self.p_el_enc(pattern.edge_attr)
+        graph_v = self.g_v_enc(graph.x)
+        graph_el = self.g_el_enc(graph.edge_attr)
 
         p_enc = pattern_v
-        p_e_enc = torch.cat([pattern_e, pattern_el], dim=1)
+        p_e_enc = pattern_el
         g_enc = graph_v
-        g_e_enc = torch.cat([graph_e, graph_el], dim=1)
+        g_e_enc = graph_el
         return p_enc, g_enc, p_e_enc, g_e_enc
 
     def get_emb(self, pattern, graph):
@@ -85,22 +87,20 @@ class GraphModel(nn.Module):
 
         # p_v_enc,p_vl_enc通过create_enc调用nn.Embedding()网络,将词转化为词向量
         # 但其实pattern_v,graph_v并没有用到
-        pattern_v = self.p_v_enc(pattern.ndata["id"])
-        pattern_e = self.p_e_enc(pattern.edata["id"])
-        graph_v = self.g_v_enc(graph.ndata["id"])
-        graph_e, graph_el = self.g_e_enc(graph.edata["id"]), self.g_el_enc(graph.edata["label"])
+        # pattern_v = self.p_v_enc(pattern.x)
+        pattern_e = self.p_e_enc(pattern.edge_attr)
+        # graph_v = self.g_v_enc(graph.x)
+        graph_el = self.g_el_enc(graph.edge_attr)
 
         if self.init_emb == "None":
-            g_emb = graph_v
+            # g_emb = graph_v
             g_e_emb = graph_el
 
         else:
             # p_vl_emb将词向量通过create_emb做了一个线性映射，有三种不同的方法，区别在于线性映射的参数初始化方式不同
-            p_emb = self.p_vl_emb(pattern_v)
-            g_emb = self.g_vl_emb(graph_v)
             p_e_emb = self.p_el_emb(pattern_e)
             g_e_emb = self.g_el_emb(graph_el)
-        return p_emb, g_emb, p_e_emb, g_e_emb
+        return p_e_emb, g_e_emb
 
     def get_emb_dim(self):
         if self.init_emb == "None":
