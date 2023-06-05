@@ -113,15 +113,15 @@ class FilmSumPredictNet(BasePoolPredictNet):
         torch.nn.init.zeros_(self.linear_beta2.bias)
 
     def forward(self, pattern, graph):
-        p = self.drop(self.p_layer(torch.sum(pattern, dim=1, keepdim=True)))
+        p = self.drop(self.p_layer(pattern))
         g = self.drop(self.g_layer(graph))
-        _p = p.expand(-1, g.size(1), -1)
+        # _p = p.expand(-1, g.size(1), -1)
 
-        alpha = self.linear_alpha1(g) + self.linear_alpha2(_p)
-        beta = self.linear_beta1(g) + self.linear_beta2(_p)
+        alpha = self.linear_alpha1(g) + self.linear_alpha2(p)
+        beta = self.linear_beta1(g) + self.linear_beta2(p)
         g = (alpha + 1) * g + beta
-        p = p.squeeze()
-        g = torch.sum(g, dim=1)
+        # p = p.squeeze()
+        # g = torch.sum(g, dim=1)
         y = self.pred_layer1(
             torch.cat([p, g, g - p, g * p], dim=1))  # W ^T * FCL(x ‖ y ‖ x − y ‖ x \dot y) + b.
         y = self.act(y)  # relu

@@ -32,7 +32,7 @@ class EdgeMean(GraphModel):
 
         self.p_net, p_dim = self.create_pattern_net(
             name="pattern", input_dim=p_emb_dim, hidden_dim=config["ppn_hidden_dim"],
-            num_edge_feat=p_e_emb_dim,
+            num_edge_feat=1,
             num_layers=config["ppn_pattern_num_layers"],
             dropout=self.dropout)
         # create predict layers
@@ -65,11 +65,11 @@ class EdgeMean(GraphModel):
 
     def create_pattern_net(self, input_dim, **kwargs):
         # num_layers, num_g_hid, num_e_hid, out_g_ch, model_type, dropout
-        num_layers = kwargs.get("num_layers", 1)
+        num_layers = kwargs.get("num_layers", 3)
         hidden_dim = kwargs.get("num_g_hid", 128)
         e_hidden_dim = kwargs.get("num_e_hid", 128)
         dropout = kwargs.get("dropout", 0.2)
-        model_type = kwargs.get("model_type", "GCN")
+        model_type = kwargs.get("model_type", "NNGINConcat")
         output_dim = kwargs.get("out_g_ch", 64)
         num_node_feat = kwargs.get("num_node_feat", 1)
         num_edge_feat = kwargs.get("num_edge_feat", 1)
@@ -106,8 +106,11 @@ class EdgeMean(GraphModel):
         # x = graph.x.to(torch.float32)
         # x = self.pre_g_enc(x)
         # graph.x = x
+        # motif_x.cuda()
+        # motif_edge_index.cuda()
+        # motif_edge_attr.cuda()
         pattern_emb = self.p_net(motif_x, motif_edge_index, motif_edge_attr)
         graph_output = self.g_net(graph)
-        pred, alpha, beta = self.predict_net(pattern_emb, graph_output)
-        filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
+        pred, filmreg = self.predict_net(pattern_emb, graph_output)
+        # filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
         return pred, filmreg

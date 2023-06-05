@@ -48,11 +48,15 @@ class NestedGIN(torch.nn.Module):
                 nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)), edge_dim=hid_ch, train_eps=True)
 
     def forward(self, data):
+        data = data.cuda(0)
         edge_index, edge_attr, batch = data.edge_index, data.edge_attr, data.node_to_subgraph
+
         if 'x' in data:
             x = data.x
+            x = x.cuda()
         else:
             x = torch.ones([edge_index.max() + 1, 1])
+            x = x.cuda()
         xs = []
         for layer in range(len(self.convs)):
             x = self.convs[layer](x=x, edge_index=edge_index)

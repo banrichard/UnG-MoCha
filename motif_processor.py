@@ -318,3 +318,13 @@ def _to_datasets(all_sets):
                 for queries in all_sets] if isinstance(all_sets, list) \
         else [QueryDataset(queries=all_sets)]
     return datasets
+
+
+def _to_dataloaders(datasets, batch_size=1, shuffle=True):
+    """
+    create a lists of torch dataloader from datasets
+    """
+    dataloaders = [DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
+                   for dataset in datasets] if isinstance(datasets, list) \
+        else [DataLoader(dataset=datasets, batch_size=batch_size, shuffle=shuffle)]
+    return dataloaders

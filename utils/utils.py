@@ -518,3 +518,78 @@ def _to_dataloaders(datasets, batch_size=1, shuffle=True):
                    for dataset in datasets] if isinstance(datasets, list) \
         else [DataLoader(dataset=datasets, batch_size=batch_size, shuffle=shuffle)]
     return dataloaders
+
+def data_split_cv(all_sets, num_fold=5, seed=1):
+    """
+    only support nocumulative learning currently
+    """
+    random.seed(seed)
+    all_fold_train_sets = []
+    all_fold_val_sets = []
+    for key in sorted(all_sets.keys()):
+        random.shuffle(all_sets[key])
+
+    for i in range(num_fold):
+        train_sets = []
+        val_sets = []
+        for key in sorted(all_sets.keys()):
+            # generate the key-th set for the i-th fold
+            num_instances = int(len(all_sets[key]))
+            num_fold_instances = num_instances / num_fold
+            start = int(i * num_fold_instances)
+            end = num_instances if i == num_fold - 1 else int(i * num_fold_instances + num_fold_instances)
+            val_sets.append(all_sets[key][start: end])
+            train_sets += (all_sets[key][: start] + all_sets[key][end:])
+        all_fold_train_sets.append(train_sets)
+        all_fold_val_sets.append(val_sets)
+    return all_fold_train_sets, all_fold_val_sets
+
+
+def print_eval_res(all_eval_res, print_details=True):
+    total_loss, total_l1 = 0.0, 0.0
+    all_errors = []
+    for i, (res, loss, l1, elapse_time) in enumerate(
+            all_eval_res):  # (res, loss, loss_var, l1, l1_var, elapse_time)
+        print(
+            "Evaluation result of {}-th Eval set: Loss= {:.4f}, Loss_var = {:.4f},Avg. L1 Loss= {:.4f}, Avg. L1 var Loss={:.4f} Avg. Pred. Time= {:.9f}(s)"
+            .format(i, loss, l1 / len(res), elapse_time / len(res)))
+        errors = [(output - card) for card, output in res]
+        # errors_var = [(output_var - var) for output_var, var in res_var]
+        outputs = [output for _, output in res]
+        # cards = [card for card, _ in res]
+        # outputs_var = [output_var for _, output_var in res_var]
+        # vars = [var for var, _ in res_var]
+        # avg_outputs = np.average(outputs)
+        # std_outputs = np.std(outputs)
+        get_prediction_statistics(errors)
+        # get_prediction_statistics(errors_var)
+        all_errors += errors
+        # all_errors_var += errors_var
+        total_loss += loss
+        # total_loss_var += loss_var
+        total_l1 += l1
+        # total_l1_var += l1_var
+        if print_details:
+            for (card, output) in res:
+                print("Card : {:.4f}, Pred {:.4f}, Diff = {:.4f}".format(card, output, output - card))
+            # for (var, output_var) in res_var:
+            #     print("Var : {:.4f}, Pred {:.4f}, Diff = {:.4f}".format(var, output_var, output_var - var))
+            # for (card, output, var, output_var) in (cards, outputs, vars, outputs_var):
+            #     print("Card : {:.4f}, Pred {:.4f}, Diff = {:.4f},Var : {:.4f}, Pred_var {:.4f}, Diff_var = {:.4f},"
+            #           .format(card, output, output - card, var, output_var, output_var - var))
+            # print("Average Estimation:{:.4f}, standard deviation:{:.4f}".format(avg_outputs, std_outputs))
+    print("Evaluation result of Eval dataset: Total Loss= {:.4f}, Total L1 Loss= {:.4f}".format(total_loss, total_l1))
+    error_median = get_prediction_statistics(all_errors)
+    return error_median
+
+def get_prediction_statistics(errors: list):
+    lower, upper = np.quantile(errors, 0.25), np.quantile(errors, 0.75)
+    print("<" * 80)
+    print("Predict Result Profile of {} Queries:".format(len(errors)))
+    print("Min/Max: {:.4f} / {:.4f}".format(np.min(errors), np.max(errors)))
+    print("Mean: {:.4f}".format(np.mean(errors)))
+    print("Median: {:.4f}".format(np.median(errors)))
+    print("25%/75% Quantiles: {:.4f} / {:.4f}".format(lower, upper))
+    print(">" * 80)
+    error_median = abs(upper - lower)
+    return error_median

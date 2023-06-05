@@ -153,8 +153,8 @@ class MotifGNN(nn.Module):
                 node_nn=nn.Sequential(nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)))
         elif model_type == "NNGINConcat":
             return lambda in_ch, hid_ch, e_hid_ch: NNGINConcatConv(
-                edge_nn=nn.Sequential(nn.Linear(self.num_edge_feat, e_hid_ch), nn.ReLU(), nn.Linear(e_hid_ch, in_ch)),
-                node_nn=nn.Sequential(nn.Linear(in_ch * 2, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)))
+                edge_nn=nn.Sequential(nn.Linear(self.num_edge_feat, e_hid_ch), nn.ReLU(), nn.Linear(e_hid_ch, e_hid_ch)),
+                node_nn=nn.Sequential(nn.Linear(in_ch + e_hid_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)))
         elif model_type == "GAT":
             return GATConv
         elif model_type == "SAGE":
@@ -171,6 +171,9 @@ class MotifGNN(nn.Module):
 
     def forward(self, x, edge_index, edge_attr=None):
         x, edge_index, edge_attr = x.squeeze(0), edge_index.squeeze(0), edge_attr.squeeze(0)
+        x = x.cuda(0)
+        edge_index = edge_index.cuda(0)
+        edge_attr = edge_attr.cuda(0)
         if self.model_type == 'FA' or self.model_type == 'GCN2':
             x_0 = x
         else:
