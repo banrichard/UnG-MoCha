@@ -232,18 +232,6 @@ class Queryset(object):
             cnt += 1
         return edge_index, edge_weight
 
-    def _get_edges_index_embed(self, motif):
-        edge_index = torch.ones(size=(2, motif.number_of_edges()), dtype=torch.int)
-        edge_weight = torch.zeros(size=(motif.number_of_edges(), self.edge_embed_dim), dtype=torch.float)
-        cnt = 0
-        for e in motif.edges():
-            edge_index[0][cnt], edge_index[1][cnt] = e[0], e[1]
-            for label in motif.edges[e]["labels"]:
-                edge_weight[cnt] += self.edge_embed_feat[label]
-                self.edge_label_fre += 1
-            cnt += 1
-        return edge_index, edge_weight
-
     def get_label_card(self, graph: nx.Graph):
         node_label_card = {}
         edge_label_card = {}
@@ -307,8 +295,8 @@ class QueryDataset(Dataset):
         decomp_x, decomp_edge_attr, decomp_edge_attr: list[Tensor]
         """
         x, edge_index, edge_attr, card, var = self.queries[index]
-        card = torch.tensor(card, dtype=torch.float)
-        var = torch.tensor(var, dtype=torch.float)
+        card = torch.tensor(math.log2(card), dtype=torch.float)
+        var = torch.tensor(math.log2(var), dtype=torch.float)
 
         return x, edge_index, edge_attr, card, var
 

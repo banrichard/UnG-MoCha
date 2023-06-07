@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 from model.Embedding import Embedding
+from model.MLP import MLP
 from model.PredictNet import FilmSumPredictNet
 from utils.utils import get_enc_len, int2onehot
 
@@ -151,6 +152,9 @@ class GraphModel(nn.Module):
     def create_predict_net(self, predict_type, pattern_dim, graph_dim, **kw):
         if predict_type == "None":
             predict_net = None
+        elif predict_type == "MLP":
+            hidden_dim = kw.get("hidden_dim", 64)
+            predict_net = MLP(pattern_dim + graph_dim, hidden_dim, 1)
         elif predict_type == "MeanPredictNet":
             hidden_dim = kw.get("hidden_dim", 64)
             predict_net = MeanPredictNet(pattern_dim, graph_dim, hidden_dim,

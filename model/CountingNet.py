@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+from model.MLP import MLP
 from model.Embedding import Embedding
 from utils.batch import Batch
 from model.GraphModel import GraphModel

@@ -16,7 +16,8 @@ from graph_converter import Converter
 from model.CountingNet import EdgeMean
 from motif_processor import QueryPreProcessing, Queryset, _to_datasets
 from utils.loss_cal import bp_compute_large10_abmae, bp_compute_abmae
-from utils.utils import anneal_fn, _to_cuda, _to_dataloaders, data_split_cv, print_eval_res
+from utils.utils import anneal_fn, _to_cuda, _to_dataloaders, data_split_cv, print_eval_res, \
+    get_linear_schedule_with_warmup
 from utils.graph_operator import load_graph, k_hop_induced_subgraph, random_walk_on_subgraph, create_batch
 from utils.batch import Batch
 
@@ -38,7 +39,7 @@ train_config = {
     "num_workers": 12,
 
     "epochs": 200,
-    "batch_size": 4,
+    "batch_size": 64,
     "update_every": 1,  # actual batch_sizer = batch_size * update_every
     "print_every": 10,
     "init_emb": True,  # None, Normal
@@ -49,12 +50,12 @@ train_config = {
     "cv": False,
 
     "reg_loss": "MSE",  # MAE, MSEl
-    "bp_loss": "MSE",  # MAE, MSE
+    "bp_loss": "MAE",  # MAE, MSE
     "bp_loss_slp": "anneal_cosine$1.0$0.01",  # 0, 0.01, logistic$1.0$0.01, linear$1.0$0.01, cosine$1.0$0.01,
     # cyclical_logistic$1.0$0.01, cyclical_linear$1.0$0.01, cyclical_cosine$1.0$0.01
     # anneal_logistic$1.0$0.01, anneal_linear$1.0$0.01, anneal_cosine$1.0$0.01
-    "lr": 0.001,
-    "weight_decay": 0.00001,
+    "lr": 0.0001,
+    "weight_decay": 0.0005,
     "weight_decay_film": 0.00001,
     "max_grad_norm": 8,
 
@@ -132,11 +133,11 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
     elif config["reg_loss"] == "SMSE":
         reg_crit = lambda pred, target: F.smooth_l1_loss(F.relu(pred), target)
     if config["bp_loss"] == "MAE":
-        bp_crit = lambda pred, target, neg_slp: F.l1_loss(F.leaky_relu(pred, neg_slp), target)
+        bp_crit = lambda pred, target: F.l1_loss(F.leaky_relu(pred), target)
     elif config["bp_loss"] == "MSE":
-        bp_crit = lambda pred, target, neg_slp: F.mse_loss(F.leaky_relu(pred, neg_slp), target)
+        bp_crit = lambda pred, target: F.mse_loss(F.leaky_relu(pred), target)
     elif config["bp_loss"] == "SMSE":
-        bp_crit = lambda pred, target, neg_slp: F.smooth_l1_loss(F.leaky_relu(pred, neg_slp), target)
+        bp_crit = lambda pred, target: F.smooth_l1_loss(F.leaky_relu(pred), target)
     # data preparation
 
     # config['init_pe_dim'] = graph.edge_attr.size(1)
@@ -169,7 +170,7 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
             bp_loss_slp, l0, l1 = config["bp_loss_slp"].rsplit("$", 3)
             neg_slp = anneal_fn(bp_loss_slp, i + epoch * epoch_step, T=total_step // 4, lambda0=float(l0),
                                 lambda1=float(l1))
-        bp_loss = bp_crit(pred, card, neg_slp) + train_config["weight_decay_film"] * filmreg
+        bp_loss = bp_crit(pred, card) + train_config["weight_decay_film"] * filmreg
         # filmloss=(torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
         # bp_loss+=0.00001*filmloss
         # float
@@ -183,10 +184,11 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
                               epoch * epoch_step + i)
             writer.add_scalar("%s/BP-%s" % (data_type, config["bp_loss"]), bp_loss_item, epoch * epoch_step + i)
 
-        if logger and (i % config["print_every"] == 0 or i == epoch_step - 1):
+        if logger and ((i / config['batch_size']) % config["print_every"] == 0 or i == epoch_step - 1):
             logger.info(
-                "epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5d}\tbatch: {:0>5d}/{:0>5d}\treg loss: {:0>10.3f}\tbp loss: {:0>16.3f}\tground: {:.3f}\tpredict: {:.3f}".format(
-                    int(epoch), int(config["epochs"]), data_type, int(i), int(epoch_step),
+                "epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\tbatch: {:0>5d}/{:0>5d}\treg loss: {:0>10.3f}\tbp loss: {:0>16.3f}\tground: {:.3f}\tpredict: {:.3f}".format(
+                    int(epoch), int(config["epochs"]), data_type, int(i / config['batch_size']),
+                    int(epoch_step / config['batch_size']),
                     float(reg_loss_item), float(bp_loss_item),
                     float(card), float(pred[0].item())))
         bp_loss.backward()
@@ -207,14 +209,14 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
         writer.add_scalar("%s/REG-%s-epoch" % (data_type, config["reg_loss"]), mean_reg_loss, epoch)
         writer.add_scalar("%s/BP-%s-epoch" % (data_type, config["bp_loss"]), mean_bp_loss, epoch)
     if logger:
-        logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5d}\treg loss: {:0>10.3f}\tbp loss: {:0>16.3f}".format(
+        logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\treg loss: {:0>10.3f}\tbp loss: {:0>16.3f}".format(
             epoch, config["epochs"], data_type, mean_reg_loss, mean_bp_loss))
 
     gc.collect()
     return mean_reg_loss, mean_bp_loss, total_time
 
 
-def evaluate(model, data_type, data_loader, config, epoch, graph, logger=None, writer=None):
+def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=None):
     epoch_step = len(data_loader)
     total_step = config["epochs"] * epoch_step
     total_reg_loss = 0
@@ -222,52 +224,30 @@ def evaluate(model, data_type, data_loader, config, epoch, graph, logger=None, w
     total_cnt = 1e-6
 
     evaluate_results = {"data": {"count": list(), "pred": list()},
-                        "error": {"mae": INF, "mse": INF},
+                        "error": {"mae": 0.0, "mse": 0.0},
                         "time": {"avg": list(), "total": 0.0}}
 
     if config["reg_loss"] == "MAE":
-        reg_crit = lambda pred, target: F.l1_loss(F.relu(pred), target, reduce="none")
+        reg_crit = lambda pred, target: F.l1_loss(F.relu(pred), target)
     elif config["reg_loss"] == "MSE":
-        reg_crit = lambda pred, target: F.mse_loss(F.relu(pred), target, reduce="none")
+        reg_crit = lambda pred, target: F.mse_loss(F.relu(pred), target)
     elif config["reg_loss"] == "SMSE":
-        reg_crit = lambda pred, target: F.smooth_l1_loss(F.relu(pred), target, reduce="none")
+        reg_crit = lambda pred, target: F.smooth_l1_loss(F.relu(pred), target)
     elif config["reg_loss"] == "MAEMSE":
-        reg_crit = lambda pred, target: F.mse_loss(F.relu(pred), target, reduce="none") + \
-                                        F.l1_loss(F.relu(pred), target, reduce="none")
-    elif config["reg_loss"] == "10MAE":
-        reg_crit = lambda pred, target: bp_compute_large10_abmae(F.leaky_relu(pred), target)
-    elif config["reg_loss"] == "ABMAE":
-        reg_crit = lambda pred, target: bp_compute_abmae(F.relu(pred), target) + 0.8 * F.l1_loss(F.relu(pred), target,
-                                                                                                 reduce="none")
-    elif config["reg_loss"] == "ABMSEMAE":
-        reg_crit = lambda pred, target: bp_compute_abmae(F.relu(pred), target) + F.l1_loss(F.relu(pred),
-                                                                                           target) + F.mse_loss(
-            F.relu(pred), target)
-    elif config["reg_loss"] == "MSEABMAE":
-        reg_crit = lambda pred, target: bp_compute_abmae(F.relu(pred), target) + F.mse_loss(F.relu(pred), target)
+        reg_crit = lambda pred, target: F.mse_loss(F.relu(pred), target) + \
+                                        F.l1_loss(F.relu(pred), target)
     else:
         raise NotImplementedError
 
     if config["bp_loss"] == "MAE":
-        bp_crit = lambda pred, target, neg_slp: F.l1_loss(F.leaky_relu(pred, neg_slp), target, reduce="none")
+        bp_crit = lambda pred, target: F.l1_loss(F.leaky_relu(pred), target)
     elif config["bp_loss"] == "MSE":
-        bp_crit = lambda pred, target, neg_slp: F.mse_loss(F.leaky_relu(pred, neg_slp), target, reduce="none")
+        bp_crit = lambda pred, target: F.mse_loss(F.leaky_relu(pred), target)
     elif config["bp_loss"] == "SMSE":
-        bp_crit = lambda pred, target, neg_slp: F.smooth_l1_loss(F.leaky_relu(pred, neg_slp), target, reduce="none")
+        bp_crit = lambda pred, target: F.smooth_l1_loss(F.leaky_relu(pred), target)
     elif config["bp_loss"] == "MAEMSE":
-        bp_crit = lambda pred, target, neg_slp: F.mse_loss(F.leaky_relu(pred, neg_slp), target, reduce="none") \
-                                                + F.l1_loss(F.leaky_relu(pred, neg_slp), target, reduce="none")
-    elif config["bp_loss"] == "10MAE":
-        bp_crit = lambda pred, target, neg_slp: bp_compute_large10_abmae(F.leaky_relu(pred, neg_slp), target)
-    elif config["bp_loss"] == "ABMAE":
-        bp_crit = lambda pred, target, neg_slp: bp_compute_abmae(F.leaky_relu(pred, neg_slp), target) + 0.8 * F.l1_loss(
-            F.leaky_relu(pred, neg_slp), target, reduce="none")
-    elif config["bp_loss"] == "ABMSEMAE":
-        bp_crit = lambda pred, target, neg_slp: bp_compute_abmae(F.leaky_relu(pred, neg_slp), target) + F.l1_loss(
-            F.leaky_relu(pred, neg_slp), target, reduce="none") + F.mse_loss(F.leaky_relu(pred, neg_slp), target)
-    elif config["bp_loss"] == "MSEABMAE":
-        bp_crit = lambda pred, target, neg_slp: bp_compute_abmae(F.leaky_relu(pred, neg_slp), target) + F.mse_loss(
-            F.leaky_relu(pred, neg_slp), target)
+        bp_crit = lambda pred, target: F.mse_loss(F.leaky_relu(pred), target) \
+                                       + F.l1_loss(F.leaky_relu(pred), target)
     else:
         raise NotImplementedError
 
@@ -287,28 +267,15 @@ def evaluate(model, data_type, data_loader, config, epoch, graph, logger=None, w
             evaluate_results["data"]["pred"].extend(pred.cpu().view(-1).tolist())
             pred = pred.cpu()
             reg_loss = reg_crit(pred, card)
-
-            if isinstance(config["bp_loss_slp"], (int, float)):
-                neg_slp = float(config["bp_loss_slp"])
-            else:
-                bp_loss_slp, l0, l1 = config["bp_loss_slp"].rsplit("$", 3)
-                neg_slp = anneal_fn(bp_loss_slp, batch_id + epoch * epoch_step, T=total_step // 4, lambda0=float(l0),
-                                    lambda1=float(l1))
-            bp_loss = bp_crit(pred, card, neg_slp) + train_config["weight_decay_film"] * filmreg
+            bp_loss = bp_crit(pred, card) + train_config["weight_decay_film"] * filmreg
 
             reg_loss_item = reg_loss.mean().item()
             bp_loss_item = bp_loss.mean().item()
             total_reg_loss += reg_loss_item
             total_bp_loss += bp_loss_item
 
-            evaluate_results["error"]["mae"] += F.l1_loss(F.relu(pred), card, reduce="none").sum().item()
-            evaluate_results["error"]["mse"] += F.mse_loss(F.relu(pred), card, reduce="none").sum().item()
-
-            if writer:
-                writer.add_scalar("%s/REG-%s" % (data_type, config["reg_loss"]), reg_loss_item,
-                                  epoch * epoch_step + batch_id)
-                writer.add_scalar("%s/BP-%s" % (data_type, config["bp_loss"]), bp_loss_item,
-                                  epoch * epoch_step + batch_id)
+            evaluate_results["error"]["mae"] += F.l1_loss(F.relu(pred), card).sum().item()
+            evaluate_results["error"]["mse"] += F.mse_loss(F.relu(pred), card).sum().item()
 
             if logger and batch_id == epoch_step - 1:
                 logger.info(
@@ -321,9 +288,7 @@ def evaluate(model, data_type, data_loader, config, epoch, graph, logger=None, w
             total_cnt += 1
         mean_reg_loss = total_reg_loss / total_cnt
         mean_bp_loss = total_bp_loss / total_cnt
-        if writer:
-            writer.add_scalar("%s/REG-%s-epoch" % (data_type, config["reg_loss"]), mean_reg_loss, epoch)
-            writer.add_scalar("%s/BP-%s-epoch" % (data_type, config["bp_loss"]), mean_bp_loss, epoch)
+
         if logger:
             logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\treg loss: {:0>10.3f}\tbp loss: {:0>16.3f}".format(
                 epoch, config["epochs"], data_type, mean_reg_loss, mean_bp_loss))
@@ -478,94 +443,80 @@ if __name__ == "__main__":
     logger.info("num of parameters: %d" % (sum(p.numel() for p in model.parameters() if p.requires_grad)))
 
     # optimizer and losses
-    writer = SummaryWriter(save_model_dir)
+    writer = SummaryWriter()
     optimizer = torch.optim.AdamW(model.parameters(), lr=train_config["lr"], weight_decay=train_config["weight_decay"],
                                   amsgrad=True)
     optimizer.zero_grad()
     scheduler = None
+    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.001)
     # scheduler = get_linear_schedule_with_warmup(optimizer,
-    #     len(data_loaders["train"]), train_config["epochs"]*len(data_loaders["train"]), min_percent=0.0001)
-    best_reg_losses = {"0": INF, "1": INF, "2": INF}
-    best_reg_epochs = {"0": -1, "1": -1, "2": -1}
+    # len(train_loaders), train_config["epochs"]*len(train_loaders), min_percent=0.0001)
+    best_reg_losses = {"train": INF, "val": INF, "test": INF}
+    best_reg_epochs = {"train": -1, "val": -1, "test": -1}
     torch.backends.cudnn.benchmark = True
     total_train_time = 0
     total_dev_time = 0
     total_test_time = 0
     for epoch in range(train_config["epochs"]):
-        if train_config['cv'] == True:
-            cross_validate(model=model, query_set=QS, device=device, config=train_config, graph=graph, logger=logger,
-                           writer=writer)
-        else:
-            for loader_idx, dataloader in enumerate(train_loaders):
-                mean_reg_loss, mean_bp_loss, _time = train(model, optimizer, scheduler, loader_idx, dataloader, device,
-                                                           train_config, epoch, graph, logger=logger, writer=writer)
-                total_train_time += _time
-                torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
-            for loader_idx, dataloader in enumerate(val_loaders):
-                mean_reg_loss, mean_bp_loss, evaluate_results, total_time = evaluate(model=model, data_type="val",
-                                                                                     data_loader=dataloader,
-                                                                                     config=train_config, epoch=epoch,
-                                                                                     graph=graph,
-                                                                                     logger=logger, writer=writer)
-    #         if mean_reg_loss <= best_reg_losses[loader_idx]:
-    #             best_reg_losses[loader_idx] = mean_reg_loss
-    #             best_reg_epochs[loader_idx] = epoch
-    #             logger.info(
-    #                 "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(loader_idx, mean_reg_loss,
-    #                                                                                     epoch))
-    # for loader_idx in train_loaders.keys():
-    #     logger.info(
-    #         "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(loader_idx, best_reg_losses[loader_idx],
-    #                                                                             best_reg_epochs[loader_idx]))
-    # _________________________________________________________________________________________________________________
-    # best_epoch = best_reg_epochs["dev"]
-    #
-    # data_loaders = OrderedDict({"test": None})
-    # if all([os.path.exists(os.path.join(train_config["save_data_dir"],
-    #                                     "%s_%s_dataset.pt" % (
-    #                                             data_type, "dgl" if train_config["model"] in ["RGCN", "RGIN", "PPN",
-    #                                                                                           "EDGEMEAN", "EDGESUM",
-    #                                                                                           "EGATS",
-    #                                                                                           "EDGESUMS"] else "edgeseq")))
-    #         for data_type in data_loaders]):
-    #
-    #     logger.info("loading data from pt...")
-    #     for data_type in data_loaders:
-    #         if train_config["model"] in ["RGCN", "RGIN", "PPN", "EDGEMEAN", "EDGESUM", "EGATS", "EDGESUMS"]:
-    #             dataset = GraphAdjDataset(list())
-    #             dataset.load(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-    #             sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],
-    #                               shuffle=data_type == "train", drop_last=False)
-    #             data_loader = DataLoader(dataset,
-    #                                      batch_sampler=sampler,
-    #                                      collate_fn=GraphAdjDataset.batchify,
-    #                                      pin_memory=data_type == "train")
-    #         data_loaders[data_type] = data_loader
-    #         logger.info("data (data_type: {:<5s}, len: {}) generated".format(data_type, len(dataset.data)))
-    #         logger.info(
-    #             "data_loader (data_type: {:<5s}, len: {}, batch_size: {}) generated".format(data_type, len(data_loader),
-    #                                                                                         train_config["batch_size"]))
-    # else:
-    #     data = load_data(train_config["graph_dir"], train_config["pattern_dir"], train_config["metadata_dir"],
-    #                      num_workers=train_config["num_workers"])
-    #     logger.info("{}/{}/{} data loaded".format(len(data["train"]), len(data["dev"]), len(data["test"])))
-    #     for data_type, x in data.items():
-    #         if train_config["model"] in ["RGCN", "RGIN", "PPN", "EDGEMEAN", "EDGESUM", "EGATS", "EDGESUMS"]:
-    #             if os.path.exists(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type))):
-    #                 dataset = GraphAdjDataset(list())
-    #                 dataset.load(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-    #             else:
-    #                 dataset = GraphAdjDataset(x)
-    #                 dataset.save(os.path.join(train_config["save_data_dir"], "%s_dgl_dataset.pt" % (data_type)))
-    #             sampler = Sampler(dataset, group_by=["graph", "pattern"], batch_size=train_config["batch_size"],
-    #                               shuffle=data_type == "train", drop_last=False)
-    #             data_loader = DataLoader(dataset,
-    #                                      batch_sampler=sampler,
-    #                                      collate_fn=GraphAdjDataset.batchify,
-    #                                      pin_memory=data_type == "train")
-    #         data_loaders[data_type] = data_loader
-    #         logger.info("data (data_type: {:<5s}, len: {}) generated".format(data_type, len(dataset.data)))
-    #         logger.info(
-    #             "data_loader (data_type: {:<5s}, len: {}, batch_size: {}) generated".format(data_type, len(data_loader),
-    #                                                                                         train_config["batch_size"]))
+        # if train_config['cv'] == True:
+        #     cross_validate(model=model, query_set=QS, device=device, config=train_config, graph=graph, logger=logger,
+        #                    writer=writer)
+        # else:
+        for loader_idx, dataloader in enumerate(train_loaders):
+            mean_reg_loss, mean_bp_loss, _time = train(model, optimizer=optimizer, scheduler=scheduler,
+                                                       data_type="train", data_loader=dataloader,
+                                                       device=device, config=train_config,
+                                                       epoch=epoch, graph=graph,
+                                                       logger=logger, writer=writer
+                                                       )
+            total_train_time += _time
+            torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
+        for loader_idx, dataloader in enumerate(val_loaders):
+            mean_reg_loss, mean_bp_loss, evaluate_results, total_time = evaluate(model=model, data_type="val",
+                                                                                 data_loader=dataloader,
+                                                                                 config=train_config,
+                                                                                 graph=graph,
+                                                                                 logger=logger, writer=writer)
+            if writer:
+                writer.add_scalar("%s/REG-%s-epoch" % ("val", train_config["reg_loss"]), mean_reg_loss, epoch)
+                writer.add_scalar("%s/BP-%s-epoch" % ("val", train_config["bp_loss"]), mean_bp_loss, epoch)
+            total_dev_time += total_time
+
+            if mean_reg_loss <= best_reg_losses['val']:
+                best_reg_losses['val'] = mean_reg_loss
+                best_reg_epochs['val'] = epoch
+                logger.info(
+                    "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format("val",
+                                                                                        mean_reg_loss,
+                                                                                        epoch))
+                torch.save(model.state_dict(), os.path.join(save_model_dir, 'best_epoch.pt'))
+            with open(os.path.join(save_model_dir, '%s_%d_%d.json' % ("val", loader_idx, epoch)), "w") as f:
+                json.dump(evaluate_results, f)
+                # for data_type in data_loaders.keys():
+                #     logger.info(
+                #         "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(data_type,
+                #                                                                             best_reg_losses[data_type],
+                #                                                                             best_reg_epochs[data_type]))
     print("data finish")
+    model.load_state_dict(torch.load(os.path.join(save_model_dir, 'best_epoch.pt')))
+    # print(model)
+    for loader_idx, data_loader in enumerate(test_loaders):
+        mean_reg_loss, mean_bp_loss, evaluate_results, _time = evaluate(model=model, data_type="test",
+                                                                        data_loader=data_loader,
+                                                                        config=train_config,
+                                                                        graph=graph,
+                                                                        logger=logger, writer=writer)
+        total_test_time += _time
+        if mean_reg_loss <= best_reg_losses['test']:
+            best_reg_losses['test'] = mean_reg_loss
+            # best_reg_epochs['test'] =
+            logger.info(
+                "data_type: {:<5s}\tbest mean loss: {:.3f}".format("val", mean_reg_loss))
+            with open(os.path.join(save_model_dir, '%s_%d.json' % ("best_test", loader_idx)), "w") as f:
+                json.dump(evaluate_results, f)
+
+        logger.info(
+            "data_type: {:<5s}\tbest mean loss: {:.3f} ".format("test", mean_reg_loss))
+    logger.info("train time: {:.3f}, train time per epoch :{:.3f}, test time: {:.3f}, all time: {:.3f}"
+                .format(total_train_time, total_train_time / train_config["epochs"], total_test_time,
+                        total_train_time + total_dev_time + total_test_time))
