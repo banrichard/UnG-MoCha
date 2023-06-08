@@ -31,17 +31,17 @@ class GraphModel(nn.Module):
         self.add_degree = config["predict_net_add_degree"]
 
         # create encoding layer
-        self.g_v_enc, self.g_e_enc, self.g_el_enc = \
-            [self.create_enc(max_n, self.base) for max_n in [self.max_ngv, self.max_nge, self.max_ngel]]
-        self.p_v_enc, self.p_e_enc, self.p_el_enc = [self.create_enc(max_n, self.base) for max_n in
-                                                     [self.max_npv, self.max_npe,
-                                                      self.max_npel]]
-
-        # create embedding layers
-        self.g_v_emb = self.create_emb(self.g_v_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
-        self.g_el_emb = self.create_emb(self.g_el_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
-
-        self.p_el_emb = self.create_emb(self.p_el_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
+        # self.g_v_enc, self.g_e_enc, self.g_el_enc = \
+        #     [self.create_enc(max_n, self.base) for max_n in [self.max_ngv, self.max_nge, self.max_ngel]]
+        # self.p_v_enc, self.p_e_enc, self.p_el_enc = [self.create_enc(max_n, self.base) for max_n in
+        #                                              [self.max_npv, self.max_npe,
+        #                                               self.max_npel]]
+        #
+        # # create embedding layers
+        # self.g_v_emb = self.create_emb(self.g_v_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
+        # self.g_el_emb = self.create_emb(self.g_el_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
+        #
+        # self.p_el_emb = self.create_emb(self.p_el_enc.embedding_dim, self.emb_dim, init_emb=self.init_emb)
 
         # create networks
         # create predict layers

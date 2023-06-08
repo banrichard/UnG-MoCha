@@ -23,15 +23,12 @@ class QueryPreProcessing(object):
         self.true_card_dir = true_card_dir
         self.true_card_load_path = os.path.join(self.data_dir, self.dataset, self.true_card_dir)
         self.num_queries = 0
-        self.all_subsets = {}  # {(size, patten) -> [(decomp_graphs, true_card]}
         # preserve the undecomposed queries
         self.all_queries = {}  # {(size, patten) -> [(graph, card)]}
         self.lower_card = 10 ** 0
         self.upper_card = 10 ** 20
 
     def decomose_queries(self):
-        avg_label_den = 0.0
-        distinct_card = {}
         subsets_dir = os.listdir(self.queryset_load_path)
         for subset_dir in subsets_dir:
             queries_dir = os.path.join(self.queryset_load_path, subset_dir)
@@ -44,9 +41,9 @@ class QueryPreProcessing(object):
                 card_load_path = os.path.join(self.true_card_load_path, subset_dir, query_dir)
                 if not os.path.isfile(query_load_path) or os.path.splitext(query_load_path)[1] == ".pickle":
                     continue
-                # load, decompose the query
-                query, label_den = self.load_query(query_load_path)
-                avg_label_den += label_den
+                # load the query
+                query = self.load_query(query_load_path)
+                # avg_label_den += label_den
                 true_card, true_var = self.load_card(card_load_path)
                 if true_card >= self.upper_card or true_card < self.lower_card:
                     continue
@@ -57,7 +54,7 @@ class QueryPreProcessing(object):
                 query_save_path = os.path.splitext(query_load_path)[0] + ".pickle"
                 self.save_decomposed_query(query, true_card, query_save_path)
             # print("save decomposed query: {}".format(query_save_path))
-        print("average label density: {}".format(avg_label_den / self.num_queries))
+        # print("average label density: {}".format(avg_label_den / self.num_queries))
 
     def node_reorder(self, query, nodes_list, edges_list):
         idx_dict = {}
@@ -107,8 +104,8 @@ class QueryPreProcessing(object):
         # print('number of nodes: {}'.format(graph.number_of_nodes()))
         # print('number of edges: {}'.format(graph.number_of_edges()))
         file.close()
-        label_den = float(label_cnt) / query.number_of_nodes()
-        return query, label_den
+        # label_den = float(label_cnt) / query.number_of_nodes()
+        return query
 
     def load_card(self, card_load_path):
         with open(card_load_path, "r") as in_file:

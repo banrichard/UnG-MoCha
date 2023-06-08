@@ -60,7 +60,7 @@ train_config = {
     "max_grad_norm": 8,
 
     "model": "EDGEMEAN",  # CNN, RNN, TXL, RGCN, RGIN, RSIN
-
+    "motif_net":"NNGINConcat",
     "emb_dim": 128,
     "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
 
@@ -470,7 +470,7 @@ if __name__ == "__main__":
                                                        logger=logger, writer=writer
                                                        )
             total_train_time += _time
-            torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
+            # torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
         for loader_idx, dataloader in enumerate(val_loaders):
             mean_reg_loss, mean_bp_loss, evaluate_results, total_time = evaluate(model=model, data_type="val",
                                                                                  data_loader=dataloader,
@@ -512,7 +512,7 @@ if __name__ == "__main__":
             # best_reg_epochs['test'] =
             logger.info(
                 "data_type: {:<5s}\tbest mean loss: {:.3f}".format("val", mean_reg_loss))
-            with open(os.path.join(save_model_dir, '%s_%d.json' % ("best_test", loader_idx)), "w") as f:
+            with open(os.path.join(save_model_dir, '%s_%s_%d.json' % (train_config['motif_net'], "best_test", loader_idx)), "w") as f:
                 json.dump(evaluate_results, f)
 
         logger.info(

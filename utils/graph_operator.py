@@ -10,7 +10,7 @@ import torch_geometric.utils
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import from_networkx
-from utils.batch import Batch
+from batch import Batch
 import torch.nn.functional as F
 
 
@@ -26,6 +26,28 @@ def load_graph(filepath) -> nx.Graph:
         edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'prob': graph_data.iloc[i, 2]}))
     nx_graph.add_edges_from(edges)
     return nx_graph
+
+
+def k_hop_induced_subgraph_edge(graph, edge, k=1):
+    node_list = []
+    edge_list = []
+    node_u = edge[0]
+    node_v = edge[1]
+    node_list.append(node_u)
+    node_list.append(node_v)
+    for neighbor in graph.neighbors(node_u):
+        node_list.append(neighbor)
+        edge_list.append((node_u, neighbor))
+    for neighbor in graph.neighbors(node_v):
+        node_list.append(neighbor)
+        edge_list.append((node_v, neighbor))
+    node_list = list(set(node_list))
+    edge_list = [(u, v, {"prob": graph.edges[u, v]["prob"]})
+                 for (u, v) in edge_list]
+    subgraph = nx.Graph()
+    subgraph.add_nodes_from(node_list)
+    subgraph.add_edges_from(edge_list)
+    return subgraph
 
 
 def k_hop_induced_subgraph(graph, src, k=1):
@@ -136,25 +158,31 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
 
 
 if __name__ == "__main__":
-
+    import matplotlib.pyplot as plt
     graph = load_graph("../dataset/krogan/krogan_core.txt")
     # subgraph = k_hop_induced_subgraph(graph, 0)
     # candidate_sets = generate_candidate_sets(subgraph, 0)
     candidate_sets = {}
-    for node in range(graph.number_of_nodes()):
-        subgraph = k_hop_induced_subgraph(graph, node)
-        candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
-    start_time = time.time()
-    batch = create_batch(graph, candidate_sets)
-    end_time = time.time()
-    # torch.save(batch,"../dataset/krogan/graph_batch.pt")
-    print("running time of batch creation is {}s".format(end_time - start_time))
-
-    # print(candidate_sets[0].edges)
-    # print(len(candidate_sets[0].edges))
-    batch = torch.load("../model/graph_batch.pt")
-    print(batch)
+    for edge in graph.edges(data=True):
+        subgraph = k_hop_induced_subgraph_edge(graph, edge)
+        print(subgraph.edges())
+        nx.draw(subgraph,with_labels=True)
+        plt.show()
+        break
+    # for node in range(graph.number_of_nodes()):
+    #     subgraph = k_hop_induced_subgraph(graph, node)
+    #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
+    # start_time = time.time()
+    # batch = create_batch(graph, candidate_sets)
+    # end_time = time.time()
+    # # torch.save(batch,"../dataset/krogan/graph_batch.pt")
+    # print("running time of batch creation is {}s".format(end_time - start_time))
     #
-    loader = DataLoader(batch, batch_size=1, shuffle=False)
-    #
-    batch = next(iter(loader))
+    # # print(candidate_sets[0].edges)
+    # # print(len(candidate_sets[0].edges))
+    # batch = torch.load("../model/graph_batch.pt")
+    # print(batch)
+    # #
+    # loader = DataLoader(batch, batch_size=1, shuffle=False)
+    # #
+    # batch = next(iter(loader))
