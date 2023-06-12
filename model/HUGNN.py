@@ -11,7 +11,8 @@ class NestedGIN(torch.nn.Module):
     Hierarchical GNN to embed the data graph
     """
 
-    def __init__(self, num_layers, input_dim, num_g_hid, num_e_hid, out_dim=64, model_type="GINE", dropout=0.2):
+    def __init__(self, num_layers, input_dim=128, num_g_hid=128, num_e_hid=128, out_dim=64, model_type="GINE",
+                 dropout=0.2):
         super(NestedGIN, self).__init__()
         self.num_layers = num_layers
         self.num_hid = num_g_hid
@@ -29,7 +30,7 @@ class NestedGIN(torch.nn.Module):
             hidden_output_dim = self.num_hid
             if self.model_type == "GIN" or self.model_type == "GINE":
                 self.convs.append(cov_layer(hidden_input_dim, hidden_output_dim))
-        self.lin1 = nn.Linear(self.num_hid*self.num_layers, self.num_hid)
+        self.lin1 = nn.Linear(self.num_hid * self.num_layers, self.num_hid)
         self.lin2 = nn.Linear(self.num_hid, self.out_dim)
 
     def reset_parameters(self):
@@ -44,15 +45,15 @@ class NestedGIN(torch.nn.Module):
                 nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)), train_eps=True)
         elif model_type == "GINE":
             return lambda in_ch, hid_ch: GINEConv(nn=nn.Sequential(
-                nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)), edge_dim=hid_ch, train_eps=True)
+                nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)), edge_dim=self.num_e_hid,
+                train_eps=True)
 
     def forward(self, data):
         data = data.cuda(0)
         edge_index, edge_attr, batch = data.edge_index, data.edge_attr, data.node_to_subgraph
-
+        edge_attr = edge_attr.view(-1, 1).expand(-1, self.num_e_hid)
         if 'x' in data:
-            x = data.x
-            x = x.cuda()
+            x = data.x.cuda()
         else:
             x = torch.zeros([edge_index.max() + 1, 1])
             x = x.cuda()

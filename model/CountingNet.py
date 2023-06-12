@@ -42,7 +42,7 @@ class EdgeMean(GraphModel):
                                                    hidden_dim=config["predict_net_hidden_dim"])
         self.config = config
 
-    def create_graph_net(self, input_dim=1, **kwargs):
+    def create_graph_net(self, input_dim=128, **kwargs):
         num_layers = kwargs.get("num_layers", 3)
         hidden_dim = kwargs.get("num_g_hid", 128)
         e_hidden_dim = kwargs.get("num_e_hid", 128)

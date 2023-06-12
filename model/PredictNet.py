@@ -74,11 +74,12 @@ class BasePoolPredictNet(nn.Module):
             nn.init.normal_(layer.weight, 0.0, 1 / (self.hidden_dim ** 0.5))
             nn.init.zeros_(layer.bias)
         for layer in [self.pred_mean]:
-            nn.init.zeros_(layer.weight)
+            nn.init.kaiming_uniform_(layer.weight,nonlinearity='relu')
             nn.init.zeros_(layer.bias)
         for layer in [self.pred_var]:
-            nn.init.zeros_(layer.weight)
+            nn.init.kaiming_uniform_(layer.weight,nonlinearity='relu')
             nn.init.zeros_(layer.bias)
+
     def forward(self, pattern, pattern_len, graph, graph_len):
         raise NotImplementedError
 

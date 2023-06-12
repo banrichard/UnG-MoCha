@@ -146,7 +146,7 @@ class Queryset(object):
         # self.embed_dim = embed_feat.shape[1]
         # self.embed_feat = torch.from_numpy(embed_feat)
 
-        self.num_node_feat = len(self.node_label_card)
+        self.num_node_feat = 128
 
         self.edge_embed_feat = None
         self.edge_embed_dim = 0
@@ -183,15 +183,29 @@ class Queryset(object):
         x = []
         edge_index = None
         edge_attr = None
-        node_attr = self._get_nodes_attr_freq(motif)
-        edge_index, edge_attr = self._get_edge_weight_freq(motif)
+        node_attr = self._get_node_attr(motif)
+        edge_index, edge_attr = self._get_edge_attr(motif)
         x = node_attr
         return x, edge_index, edge_attr
+
+    def _get_node_attr(self, motif):
+        node_attr = torch.zeros(size=(motif.number_of_nodes(), 1), dtype=torch.float)
+        return node_attr
+
+    def _get_edge_attr(self, motif):
+        edge_index = torch.ones(size=(2, motif.number_of_edges()), dtype=torch.long)
+        edge_attr = torch.zeros(size=(motif.number_of_edges(), 1), dtype=torch.float)
+        cnt = 0
+        for (u, v, wt) in motif.edges(data=True):
+            edge_index[0][cnt], edge_index[1][cnt] = u, v
+            edge_attr[cnt] = wt['labels'][-1]
+            cnt += 1
+        return edge_index, edge_attr
 
     def _get_nodes_attr_freq(self, motif):
         node_attr = torch.ones(size=(motif.number_of_nodes(), len(self.node_label_card)), dtype=torch.float)
         for v in motif.nodes():
-            for label in motif.nodes[v]["labels"]:
+            for label in motif.nodes[v]["x"]:
                 node_attr[v][self.label_dict[label]] = self.node_label_card[label]
                 self.node_label_fre += 1
         return node_attr
@@ -213,7 +227,7 @@ class Queryset(object):
         for e in motif.edges():
             edge_index[0][cnt], edge_index[1][cnt] = e[0], e[1]
 
-            for label in motif.edges[e]["labels"]:
+            for label in motif.edges[e]["edge_attr"]:
                 edge_attr[cnt] = self.edge_label_card[label]
                 self.edge_label_fre += 1
             cnt += 1
@@ -223,7 +237,7 @@ class Queryset(object):
         edge_index = torch.ones(size=(2, motif.number_of_edges()), dtype=torch.long)
         edge_weight = torch.zeros(size=(motif.number_of_edges(), 1), dtype=torch.float)
         cnt = 0
-        for (u, v, wt) in motif.edges.data('labels'):
+        for (u, v, wt) in motif.edges.data('edge_attr'):
             edge_index[0][cnt], edge_index[1][cnt] = u, v
             edge_weight[cnt] = wt[-1]
             cnt += 1
@@ -242,7 +256,7 @@ class Queryset(object):
             if len(edge[-1]) == 0:
                 edge_label_card[-1] += edge_label_card.get(-1, 0) + 1.0
             else:
-                edge_label_card[edge[-1]['prob']] = edge_label_card.get(edge[-1]['prob'], 0) + 1.0
+                edge_label_card[edge[-1]['edge_attr']] = edge_label_card.get(edge[-1]['edge_attr'], 0) + 1.0
         for key, val in node_label_card.items():
             node_label_card[key] = val / graph.number_of_nodes()
         for key, val in edge_label_card.items():

@@ -38,8 +38,8 @@ train_config = {
     "gpu_id": 0,
     "num_workers": 12,
 
-    "epochs": 150,
-    "batch_size": 64,
+    "epochs": 200,
+    "batch_size": 32,
     "update_every": 1,  # actual batch_sizer = batch_size * update_every
     "print_every": 10,
     "init_emb": True,  # None, Normal
@@ -49,12 +49,12 @@ train_config = {
     "dropatt": 0.2,
     "cv": False,
 
-    "reg_loss": "SMSE",  # MAE, MSEl
-    "bp_loss": "SMSE",  # MAE, MSE
+    "reg_loss": "MAE",  # MAE, MSEl
+    "bp_loss": "MAE",  # MAE, MSE
     "bp_loss_slp": "anneal_cosine$1.0$0.01",  # 0, 0.01, logistic$1.0$0.01, linear$1.0$0.01, cosine$1.0$0.01,
     # cyclical_logistic$1.0$0.01, cyclical_linear$1.0$0.01, cyclical_cosine$1.0$0.01
     # anneal_logistic$1.0$0.01, anneal_linear$1.0$0.01, anneal_cosine$1.0$0.01
-    "lr": 0.00045,
+    "lr": 0.00025,
     "weight_decay": 0.0005,
     "weight_decay_var": 0.6,
     "weight_decay_film": 0.0001,
@@ -96,10 +96,10 @@ train_config = {
     "edgemean_hidden_dim": 64,
 
     "num_g_hid": 128,
-    "num_e_hid": 32,
+    "num_e_hid": 128,
     "out_g_ch": 128,
 
-    "graph_num_layers": 4,
+    "graph_num_layers": 3,
 
     "queryset_dir": "queryset",
     "true_card_dir": "label",
@@ -115,16 +115,18 @@ train_config = {
 
 
 def data_graph_transform(data_dir, dataset, dataset_name, h=1):
-    graph = load_graph(os.path.join(data_dir, dataset, dataset_name))
+    graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
+                       emb_path="dataset/krogan/embedding/krogan_core.csv")
     candidate_sets = {}
     for node in range(graph.number_of_nodes()):
         subgraph = k_hop_induced_subgraph(graph, node)
         candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
-    batch = create_batch(graph, candidate_sets, emb_path="dataset/krogan/embedding/krogan_core.csv")
+    batch = create_batch(graph, candidate_sets, emb="dataset/krogan/embedding/krogan_core.csv")
     return batch
 
 
-def train(model, optimizer, scheduler, data_type, data_loader, device, config, epoch, graph, logger=None, writer=None):
+def train(model, optimizer, scheduler, data_type, data_loader, device, config, epoch, graph, logger=None, writer=None,
+          bottleneck=False):
     global bp_crit, reg_crit
     epoch_step = len(data_loader)
     total_step = config["epochs"] * epoch_step
@@ -154,6 +156,8 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
     bp_crit_mean = lambda pred, target: F.l1_loss(F.leaky_relu(pred), target)
     bp_crit_var = lambda pred, target: F.mse_loss(F.leaky_relu(pred), target)
     # config['init_pe_dim'] = graph.edge_attr.size(1)
+    if bottleneck:
+        model.load_state_dict(torch.load(os.path.join(save_model_dir, 'best_epoch.pt')))
     model.to(device)
     model.train()
     total_time = 0
@@ -329,7 +333,7 @@ def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=N
         mean_bp_loss = total_bp_loss / total_cnt
         mean_var_loss = total_var_loss / total_cnt
         if logger and config['test_only'] is False:
-            logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\treg loss: {:0>10.3f}\tbp loss: {:0>16.3f}".format(
+            logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\treg loss: {:.4f}\tbp loss: {:.4f}".format(
                 epoch, config["epochs"], data_type, mean_reg_loss, mean_bp_loss))
 
         evaluate_results["error"]["mae"] = evaluate_results["error"]["mae"] / total_cnt
@@ -363,7 +367,8 @@ def cross_validate(model, query_set, device, config, graph, logger=None, writer=
                                                               data_type="train",
                                                               config=config, data_loader=train_loaders,
                                                               epoch=config['epochs'],
-                                                              graph=graph, logger=logger, writer=writer)
+                                                              graph=graph, logger=logger, writer=writer,
+                                                              bottleneck=False)
         total_elapse_time += fold_elapse_time
         mean_reg_loss, mean_bp_loss, mean_var_loss, fold_eval_res, fold_elapse_time = evaluate(model=model,
                                                                                                scheduler=scheduler,
@@ -419,6 +424,7 @@ def test(save_model_dir, test_loaders, config, graph, logger, writer):
             with open(os.path.join(save_model_dir,
                                    '%s_%s_%d.json' % (train_config['motif_net'], "best_test", loader_idx)), "w") as f:
                 json.dump(evaluate_results, f)
+
     return evaluate_results, total_test_time
 
 
@@ -508,8 +514,7 @@ if __name__ == "__main__":
 
     # optimizer and losses
     writer = SummaryWriter()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=train_config["lr"], weight_decay=train_config["weight_decay"],
-                                  amsgrad=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=train_config["lr"], weight_decay=train_config["weight_decay"])
     optimizer.zero_grad()
     scheduler = None
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.001)
@@ -537,7 +542,7 @@ if __name__ == "__main__":
                                                        device=device, config=train_config,
                                                        epoch=epoch, graph=graph,
                                                        logger=logger, writer=writer
-                                                       )
+                                                       , bottleneck=False)
             total_train_time += _time
             # torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
         for loader_idx, dataloader in enumerate(val_loaders):
@@ -554,12 +559,12 @@ if __name__ == "__main__":
                 writer.add_scalar("%s/Var-%s-epoch" % ("val", train_config['bp_loss']), mean_var_loss, epoch)
             total_dev_time += total_time
 
-            if mean_bp_loss <= best_bp_losses['val']:
-                best_bp_losses['val'] = mean_reg_loss
-                best_bp_epochs['val'] = epoch
+            if mean_reg_loss <= best_reg_losses['val']:
+                best_reg_losses['val'] = mean_reg_loss
+                best_reg_epochs['val'] = epoch
                 logger.info(
                     "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format("val",
-                                                                                        mean_bp_loss,
+                                                                                        mean_reg_loss,
                                                                                         epoch))
                 torch.save(model.state_dict(), os.path.join(save_model_dir, 'best_epoch.pt'))
             with open(os.path.join(save_model_dir, '%s_%d_%d.json' % ("val", loader_idx, epoch)), "w") as f:

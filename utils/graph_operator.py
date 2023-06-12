@@ -17,14 +17,19 @@ import torch.nn.functional as F
 # from dataloader import DataLoader
 
 
-def load_graph(filepath) -> nx.Graph:
+def load_graph(filepath, emb_path=None) -> nx.Graph:
     nx_graph = nx.Graph()
     # print(nx_graph.number_of_edges())
+    node_fea = None
     edges = []
     graph_data = pd.read_csv(filepath, header=None, skiprows=1, delimiter=" ")
     for i in range(len(graph_data)):
-        edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'prob': graph_data.iloc[i, 2]}))
+        edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'edge_attr': graph_data.iloc[i, 2]}))
     nx_graph.add_edges_from(edges)
+    if emb_path is not None:
+        node_fea = np.loadtxt(emb_path, delimiter=" ")[:, 1:]
+        for i in range(nx_graph.number_of_nodes()):
+            nx_graph.add_node(i, x=node_fea[i])
     return nx_graph
 
 
@@ -78,7 +83,7 @@ def candidate_filter(candidate_set):
     for candidate in candidate_set:
         cur_prob = 1
         for e in candidate.edges(data=True):
-            cur_prob *= e[2]['prob']
+            cur_prob *= e[2]['edge_attr']
         if cur_prob > prob:
             final_candidate = candidate
             prob = cur_prob
@@ -102,7 +107,7 @@ def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=20, subs=5):
         tmp_graph = subgraph.subgraph(list(node_list)).copy()
         remove_edge_list = []
         for (u, v) in tmp_graph.edges():
-            if tmp_graph.edges[u, v]['prob'] < random.random():
+            if tmp_graph.edges[u, v]['edge_attr'] < random.random():
                 remove_edge_list.append((u, v))
         tmp_graph.remove_edges_from(remove_edge_list)
         remove_node_list = [node for node in tmp_graph.nodes() if tmp_graph.degree(node) == 0]
@@ -112,7 +117,7 @@ def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=20, subs=5):
     return subgraph_with_highest_probability
 
 
-def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
+def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None):
     """
     For current stage, only support 1-hop subgraph(s)
     :param graph: the original graph (the node features are pre-embedded by Node2Vec)
@@ -122,20 +127,18 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
     # convert networkx graph into pyg style
     # edge_attrs = list(graph.edges.data("prob"))
     # pyg_graph = from_networkx(graph,group_edge_attrs=['prob'])
-    if emb_path is not None:
-        x = torch.from_numpy(np.loadtxt(emb_path, delimiter=" ")[:, 1:])
-    else:
-        x = torch.zeros(len(graph.nodes), 1)
+
+    # x = torch.ones([graph.number_of_nodes(), 1])
+    # x = nx.to_numpy_array(graph,weight='prob')
+    # x = torch.from_numpy(x)
+
+    pyg_graph = torch_geometric.utils.from_networkx(graph)
+    if emb is None:
+        x = torch.zeros(len(graph.nodes), 1, dtype=torch.float32)
         degree = list(graph.degree)
         for i in range(len(degree)):
             x[i] = degree[i][1]
-
-        # x = torch.ones([graph.number_of_nodes(), 1])
-        # x = nx.to_numpy_array(graph,weight='prob')
-        # x = torch.from_numpy(x)
-
-    pyg_graph = torch_geometric.utils.from_networkx(graph)
-    pyg_graph.x = x
+        pyg_graph.x = x
     # get the corresponding subgraph(s) of each node in the graph
     # for now we randomly select a subgraph (2023.5.15 21:30)
     pyg_subgraphs = []
@@ -144,7 +147,8 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
         pyg_subgraph = torch_geometric.utils.from_networkx(subgraph)
         pyg_subgraphs.append(pyg_subgraph)
     pyg_batch = Batch.from_data_list(pyg_subgraphs)
-
+    pyg_batch.x = pyg_batch.x.to(torch.float32)
+    pyg_batch.edge_attr = pyg_batch.edge_attr.to(torch.float32)
     pyg_batch.edge_index = torch.LongTensor(pyg_batch.edge_index)
     pyg_batch.num_nodes = sum(data_.num_nodes for data_ in pyg_subgraphs)
     pyg_batch.num_subgraphs = len(pyg_subgraphs)
@@ -155,27 +159,31 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
     pyg_batch.node_to_subgraph = pyg_batch.batch
     del pyg_batch.batch
     pyg_batch.subgraph_to_graph = torch.zeros(len(pyg_subgraphs), dtype=torch.long)
+    for k, v in pyg_graph:
+        if k not in ['x', 'edge_index', 'edge_attr', 'pos', 'num_nodes', 'batch',
+                     'z', 'rd', 'node_type']:
+            pyg_batch[k] = v
     return pyg_batch
 
 
 if __name__ == "__main__":
-    import matplotlib.pyplot as plt
+    # import matplotlib.pyplot as plt
 
-    graph = load_graph("../dataset/krogan/krogan_core.txt")
+    graph = load_graph("../dataset/krogan/krogan_core.txt", emb_path="../dataset/krogan/embedding/krogan_core.csv")
     # subgraph = k_hop_induced_subgraph(graph, 0)
     # candidate_sets = generate_candidate_sets(subgraph, 0)
-    candidate_sets = {}
-    for edge in graph.edges(data=True):
-        subgraph = k_hop_induced_subgraph_edge(graph, edge)
-        print(subgraph.edges())
-        nx.draw(subgraph, with_labels=True)
-        plt.show()
-        break
-    for node in range(graph.number_of_nodes()):
-        subgraph = k_hop_induced_subgraph(graph, node)
-        nx.draw(subgraph, with_labels=True)
-        plt.show()
-        break
+    # candidate_sets = {}
+    # for edge in graph.edges(data=True):
+    #     subgraph = k_hop_induced_subgraph_edge(graph, edge)
+    #     print(subgraph.edges())
+    #     nx.draw(subgraph, with_labels=True)
+    #     plt.show()
+    #     break
+    # for node in range(graph.number_of_nodes()):
+    #     subgraph = k_hop_induced_subgraph(graph, node)
+    #     nx.draw(subgraph, with_labels=True)
+    #     plt.show()
+    #     break
     #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
     # start_time = time.time()
     # batch = create_batch(graph, candidate_sets)
