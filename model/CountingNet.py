@@ -8,7 +8,6 @@ from model.HUGNN import NestedGIN
 from model.motifNet import MotifGNN
 
 
-
 class EdgeMean(GraphModel):
     def __init__(self, config):
         super(EdgeMean, self).__init__(config)
@@ -22,13 +21,13 @@ class EdgeMean(GraphModel):
         self.g_net, g_dim = self.create_graph_net(
             hidden_dim=config["num_g_hid"],
             num_layers=config["graph_num_layers"], num_e_hid=128,
-            dropout=self.dropout, model_type="GIN")
+            dropout=self.dropout, model_type=config['graph_net'])
 
         self.p_net, p_dim = self.create_pattern_net(
             name="pattern", input_dim=p_emb_dim, hidden_dim=config["ppn_hidden_dim"],
             num_edge_feat=1,
             num_layers=config["ppn_pattern_num_layers"],
-            dropout=self.dropout,model_type=config['motif_net'])
+            dropout=self.dropout, model_type=config['motif_net'])
         # create predict layers
 
         if self.add_enc:
@@ -72,6 +71,6 @@ class EdgeMean(GraphModel):
     def forward(self, motif_x, motif_edge_index, motif_edge_attr, graph):
         pattern_emb = self.p_net(motif_x, motif_edge_index, motif_edge_attr)
         graph_output = self.g_net(graph)
-        pred, filmreg = self.predict_net(pattern_emb, graph_output)
+        pred, var, filmreg = self.predict_net(pattern_emb, graph_output)
         # filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
-        return pred, filmreg
+        return pred, var, filmreg

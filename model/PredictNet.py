@@ -64,18 +64,21 @@ class BasePoolPredictNet(nn.Module):
         self.drop = nn.Dropout(dropout)
         self.p_layer = nn.Linear(pattern_dim, hidden_dim)
         self.g_layer = nn.Linear(graph_dim, hidden_dim)
-
+        self.bn = nn.BatchNorm1d(hidden_dim)
         self.pred_layer1 = nn.Linear(self.hidden_dim * 4, self.hidden_dim)
-        self.pred_layer2 = nn.Linear(self.hidden_dim, 1)
-
+        # self.pred_layer2 = nn.Linear(self.hidden_dim, 1)
+        self.pred_mean = nn.Linear(self.hidden_dim, 1)
+        self.pred_var = nn.Linear(self.hidden_dim, 1)
         # init
         for layer in [self.p_layer, self.g_layer, self.pred_layer1]:
             nn.init.normal_(layer.weight, 0.0, 1 / (self.hidden_dim ** 0.5))
             nn.init.zeros_(layer.bias)
-        for layer in [self.pred_layer2]:
+        for layer in [self.pred_mean]:
             nn.init.zeros_(layer.weight)
             nn.init.zeros_(layer.bias)
-
+        for layer in [self.pred_var]:
+            nn.init.zeros_(layer.weight)
+            nn.init.zeros_(layer.bias)
     def forward(self, pattern, pattern_len, graph, graph_len):
         raise NotImplementedError
 
@@ -125,10 +128,12 @@ class FilmSumPredictNet(BasePoolPredictNet):
         y = self.pred_layer1(
             torch.cat([p, g, g - p, g * p], dim=1))  # W ^T * FCL(x ‖ y ‖ x − y ‖ x \dot y) + b.
         y = self.act(y)  # relu
-        y = self.pred_layer2(y)
+        y_var = y
+        y = self.pred_mean(y)
+        var = self.pred_var(y_var)
         # return y
         filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
-        return y, filmreg
+        return y, var, filmreg
 
 
 class DIAMNet(nn.Module):

@@ -29,8 +29,7 @@ class NestedGIN(torch.nn.Module):
             hidden_output_dim = self.num_hid
             if self.model_type == "GIN" or self.model_type == "GINE":
                 self.convs.append(cov_layer(hidden_input_dim, hidden_output_dim))
-
-        self.lin1 = nn.Linear(self.num_hid, self.num_hid)
+        self.lin1 = nn.Linear(self.num_hid*self.num_layers, self.num_hid)
         self.lin2 = nn.Linear(self.num_hid, self.out_dim)
 
     def reset_parameters(self):
@@ -55,18 +54,21 @@ class NestedGIN(torch.nn.Module):
             x = data.x
             x = x.cuda()
         else:
-            x = torch.ones([edge_index.max() + 1, 1])
+            x = torch.zeros([edge_index.max() + 1, 1])
             x = x.cuda()
         xs = []
         for layer in range(len(self.convs)):
-            x = self.convs[layer](x=x, edge_index=edge_index)
+            if self.model_type == "GIN":
+                x = self.convs[layer](x=x, edge_index=edge_index)
+            elif self.model_type == "GINE":
+                x = self.convs[layer](x=x, edge_index=edge_index, edge_attr=edge_attr)
             if layer == 0:
                 xs = [x]
             else:
                 xs += [x]
             if layer < self.num_layers - 1:
                 x = F.dropout(x, p=self.dropout, training=self.training)
-        x = global_mean_pool(x, batch)
+        x = global_mean_pool(torch.cat(xs, dim=1), batch)
         # final graph representation
         x = global_add_pool(x, data.subgraph_to_graph)
         x = F.relu(self.lin1(x))

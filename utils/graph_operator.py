@@ -10,7 +10,7 @@ import torch_geometric.utils
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import from_networkx
-from batch import Batch
+from utils.batch import Batch
 import torch.nn.functional as F
 
 
@@ -108,8 +108,8 @@ def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=20, subs=5):
         remove_node_list = [node for node in tmp_graph.nodes() if tmp_graph.degree(node) == 0]
         tmp_graph.remove_nodes_from(remove_node_list)
         candidate_set.append(tmp_graph)
-    subgraph_with_high_probability = candidate_filter(candidate_set)
-    return subgraph_with_high_probability
+    subgraph_with_highest_probability = candidate_filter(candidate_set)
+    return subgraph_with_highest_probability
 
 
 def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
@@ -135,7 +135,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
         # x = torch.from_numpy(x)
 
     pyg_graph = torch_geometric.utils.from_networkx(graph)
-
+    pyg_graph.x = x
     # get the corresponding subgraph(s) of each node in the graph
     # for now we randomly select a subgraph (2023.5.15 21:30)
     pyg_subgraphs = []
@@ -149,6 +149,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
     pyg_batch.num_nodes = sum(data_.num_nodes for data_ in pyg_subgraphs)
     pyg_batch.num_subgraphs = len(pyg_subgraphs)
 
+    pyg_batch.original_x = pyg_graph.x
     pyg_batch.original_edge_index = pyg_graph.edge_index
     pyg_batch.original_edge_attr = pyg_graph.edge_attr
     pyg_batch.node_to_subgraph = pyg_batch.batch
@@ -159,6 +160,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb_path=None):
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
+
     graph = load_graph("../dataset/krogan/krogan_core.txt")
     # subgraph = k_hop_induced_subgraph(graph, 0)
     # candidate_sets = generate_candidate_sets(subgraph, 0)
@@ -166,11 +168,14 @@ if __name__ == "__main__":
     for edge in graph.edges(data=True):
         subgraph = k_hop_induced_subgraph_edge(graph, edge)
         print(subgraph.edges())
-        nx.draw(subgraph,with_labels=True)
+        nx.draw(subgraph, with_labels=True)
         plt.show()
         break
-    # for node in range(graph.number_of_nodes()):
-    #     subgraph = k_hop_induced_subgraph(graph, node)
+    for node in range(graph.number_of_nodes()):
+        subgraph = k_hop_induced_subgraph(graph, node)
+        nx.draw(subgraph, with_labels=True)
+        plt.show()
+        break
     #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
     # start_time = time.time()
     # batch = create_batch(graph, candidate_sets)
