@@ -49,14 +49,14 @@ train_config = {
     "dropatt": 0.2,
     "cv": False,
 
-    "reg_loss": "MAE",  # MAE, MSEl
-    "bp_loss": "MAE",  # MAE, MSE
+    "reg_loss": "HUBER",  # MAE, MSEl
+    "bp_loss": "HUBER",  # MAE, MSE
     "bp_loss_slp": "anneal_cosine$1.0$0.01",  # 0, 0.01, logistic$1.0$0.01, linear$1.0$0.01, cosine$1.0$0.01,
     # cyclical_logistic$1.0$0.01, cyclical_linear$1.0$0.01, cyclical_cosine$1.0$0.01
     # anneal_logistic$1.0$0.01, anneal_linear$1.0$0.01, anneal_cosine$1.0$0.01
-    "lr": 0.00025,
+    "lr": 0.00005,
     "weight_decay": 0.0005,
-    "weight_decay_var": 0.6,
+    "weight_decay_var": 0.01,
     "weight_decay_film": 0.0001,
     "max_grad_norm": 8,
 
@@ -416,14 +416,14 @@ def test(save_model_dir, test_loaders, config, graph, logger, writer):
                                                                                        graph=graph,
                                                                                        logger=logger, writer=writer)
         total_test_time += _time
-        if mean_reg_loss <= best_reg_losses['test']:
-            best_reg_losses['test'] = mean_reg_loss
-            # best_reg_epochs['test'] =
-            logger.info(
-                "data_type: {:<5s}\tbest mean loss: {:.3f}".format("test", mean_reg_loss))
-            with open(os.path.join(save_model_dir,
-                                   '%s_%s_%d.json' % (train_config['motif_net'], "best_test", loader_idx)), "w") as f:
-                json.dump(evaluate_results, f)
+        # if mean_reg_loss <= best_reg_losses['test']:
+        #     best_reg_losses['test'] = mean_reg_loss
+        # best_reg_epochs['test'] =
+        logger.info(
+            "data_type: {:<5s}\tbest mean loss: {:.3f}".format("test", mean_reg_loss))
+        with open(os.path.join(save_model_dir,
+                               '%s_%s_%d.json' % (train_config['motif_net'], "best_test", loader_idx)), "w") as f:
+            json.dump(evaluate_results, f)
 
     return evaluate_results, total_test_time
 
@@ -521,13 +521,14 @@ if __name__ == "__main__":
     # scheduler = get_linear_schedule_with_warmup(optimizer,
     # len(train_loaders), train_config["epochs"]*len(train_loaders), min_percent=0.0001)
     best_bp_losses = {"train": INF, "val": INF, "test": INF}
-    best_reg_losses = {"train": INF, "val": INF, "test": INF}
+    best_reg_losses = {0: INF, 1: INF, 2: INF}
     best_reg_epochs = {"train": -1, "val": -1, "test": -1}
     best_bp_epochs = {"train": -1, "val": -1, "test": -1}
     torch.backends.cudnn.benchmark = True
     total_train_time = 0
     total_dev_time = 0
     total_test_time = 0
+    cur_reg_loss = {}
     if train_config['test_only']:
         evaluate_results, total_test_time = test(save_model_dir, test_loaders, train_config, graph, logger, writer)
         exit(0)
@@ -558,14 +559,23 @@ if __name__ == "__main__":
                 writer.add_scalar("%s/BP-%s-epoch" % ("val", train_config["bp_loss"]), mean_bp_loss, epoch)
                 writer.add_scalar("%s/Var-%s-epoch" % ("val", train_config['bp_loss']), mean_var_loss, epoch)
             total_dev_time += total_time
-
-            if mean_reg_loss <= best_reg_losses['val']:
-                best_reg_losses['val'] = mean_reg_loss
+            # cur_reg_loss[loader_idx] = mean_reg_loss
+            # flag = True
+            # for key1, key2 in zip(cur_reg_loss.keys(), best_reg_losses.keys()):
+            #     if cur_reg_loss[key1] > best_reg_losses[key2]:
+            #         flag = False
+            # if flag:
+            #     for key1, key2 in zip(cur_reg_loss.keys(), best_reg_losses.keys()):
+            #         best_reg_losses[key2] = cur_reg_loss[key1]
+            #     best_reg_epochs['val'] = epoch
+            if mean_reg_loss <= best_reg_losses[loader_idx]:
+                best_reg_losses[loader_idx] = mean_reg_loss
                 best_reg_epochs['val'] = epoch
                 logger.info(
-                    "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format("val",
-                                                                                        mean_reg_loss,
-                                                                                        epoch))
+                    "data_type: {:<5s}\tnode_num:{:d}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format("val",
+                                                                                                       loader_idx + 3,
+                                                                                                       mean_reg_loss,
+                                                                                                       epoch))
                 torch.save(model.state_dict(), os.path.join(save_model_dir, 'best_epoch.pt'))
             with open(os.path.join(save_model_dir, '%s_%d_%d.json' % ("val", loader_idx, epoch)), "w") as f:
                 json.dump(evaluate_results, f)
