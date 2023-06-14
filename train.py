@@ -39,7 +39,7 @@ train_config = {
     "num_workers": 12,
 
     "epochs": 200,
-    "batch_size": 32,
+    "batch_size": 16,
     "update_every": 1,  # actual batch_sizer = batch_size * update_every
     "print_every": 10,
     "init_emb": True,  # None, Normal
@@ -54,10 +54,12 @@ train_config = {
     "bp_loss_slp": "anneal_cosine$1.0$0.01",  # 0, 0.01, logistic$1.0$0.01, linear$1.0$0.01, cosine$1.0$0.01,
     # cyclical_logistic$1.0$0.01, cyclical_linear$1.0$0.01, cyclical_cosine$1.0$0.01
     # anneal_logistic$1.0$0.01, anneal_linear$1.0$0.01, anneal_cosine$1.0$0.01
-    "lr": 0.00005,
+    "lr": 0.00004,
     "weight_decay": 0.0005,
     "weight_decay_var": 0.01,
     "weight_decay_film": 0.0001,
+    "decay_factor": 0.1,
+    "decay_patience": 50,
     "max_grad_norm": 8,
 
     "model": "EDGEMEAN",  # CNN, RNN, TXL, RGCN, RGIN, RSIN
@@ -66,7 +68,7 @@ train_config = {
     "emb_dim": 128,
     "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
 
-    "predict_net": "FilmSumPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
+    "predict_net": "DIAMNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
     # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,
     # MeanMemAttnPredictNet, SumMemAttnPredictNet, MaxMemAttnPredictNet,
     # DIAMNet
@@ -74,7 +76,7 @@ train_config = {
     "predict_net_add_degree": False,
     "predict_net_hidden_dim": 128,
     "predict_net_num_heads": 4,
-    "predict_net_mem_len": 4,
+    "mem_len": 1,
     "predict_net_mem_init": "mean",
     # mean, sum, max, attn, circular_mean, circular_sum, circular_max, circular_attn, lstm
     "predict_net_recurrent_steps": 3,
@@ -220,8 +222,6 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
         if (config["update_every"] < 2 or i % config["batch_size"] == 0 or i == epoch_step - 1):
             if config["max_grad_norm"] > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config["max_grad_norm"])
-            if scheduler is not None:
-                scheduler.step(epoch * epoch_step + i)
             optimizer.step()
             optimizer.zero_grad()
         e = time.time()
@@ -357,11 +357,11 @@ def cross_validate(model, query_set, device, config, graph, logger=None, writer=
         val_loaders = _to_dataloaders(datasets=val_datasets)
         # model = model(config)
         # print(model)
-        optimizer = torch.optim.Adam(model.parameters(), lr=train_config["lr"],
-                                     weight_decay=train_config["weight_decay"],
+        optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"],
+                                     weight_decay=config["weight_decay"],
                                      )
         optimizer.zero_grad()
-        scheduler = None
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=config[''])
         mean_reg_loss, mean_bp_loss, fold_elapse_time = train(model=model, optimizer=optimizer, scheduler=scheduler,
                                                               device=device,
                                                               data_type="train",
@@ -516,7 +516,7 @@ if __name__ == "__main__":
     writer = SummaryWriter()
     optimizer = torch.optim.Adam(model.parameters(), lr=train_config["lr"], weight_decay=train_config["weight_decay"])
     optimizer.zero_grad()
-    scheduler = None
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=train_config['decay_factor'])
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.001)
     # scheduler = get_linear_schedule_with_warmup(optimizer,
     # len(train_loaders), train_config["epochs"]*len(train_loaders), min_percent=0.0001)
@@ -545,6 +545,8 @@ if __name__ == "__main__":
                                                        logger=logger, writer=writer
                                                        , bottleneck=False)
             total_train_time += _time
+        if scheduler and (epoch + 1) % train_config['decay_patience'] == 0:
+            scheduler.step()
             # torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
         for loader_idx, dataloader in enumerate(val_loaders):
             mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, total_time = evaluate(model=model,

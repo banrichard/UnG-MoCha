@@ -1,6 +1,10 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from utils.utils import batch_convert_len_to_mask, gather_indices_by_lens
 
 
 def extend_dimensions(old_layer, new_input_dim=-1, new_output_dim=-1, upper=False):
@@ -74,10 +78,10 @@ class BasePoolPredictNet(nn.Module):
             nn.init.normal_(layer.weight, 0.0, 1 / (self.hidden_dim ** 0.5))
             nn.init.zeros_(layer.bias)
         for layer in [self.pred_mean]:
-            nn.init.kaiming_uniform_(layer.weight,nonlinearity='relu')
+            nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
             nn.init.zeros_(layer.bias)
         for layer in [self.pred_var]:
-            nn.init.kaiming_uniform_(layer.weight,nonlinearity='relu')
+            nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
             nn.init.zeros_(layer.bias)
 
     def forward(self, pattern, pattern_len, graph, graph_len):
@@ -139,7 +143,7 @@ class FilmSumPredictNet(BasePoolPredictNet):
 
 class DIAMNet(nn.Module):
     def __init__(self, pattern_dim, graph_dim, hidden_dim, recurrent_steps=1, num_heads=4, mem_len=4, mem_init="mean",
-                 dropout=0.0, dropatt=0.0):
+                 dropout=0.2, dropatt=0.2):
         super(DIAMNet, self).__init__()
         self.pattern_dim = pattern_dim
         self.graph_dim = graph_dim
@@ -178,14 +182,14 @@ class DIAMNet(nn.Module):
             dropatt=dropatt, act_func="softmax")
 
         self.pred_layer1 = nn.Linear(self.mem_len * self.hidden_dim + 4, self.hidden_dim)
-        self.pred_layer2 = nn.Linear(self.hidden_dim + 4, 1)
-
+        self.pred_layer_mean = nn.Linear(self.hidden_dim + 4, 1)
+        self.pred_layer_var = nn.Linear(self.hidden_dim, 1)
         # init
         scale = 1 / (self.hidden_dim ** 0.5)
         for layer in [self.p_layer, self.g_layer, self.pred_layer1]:
             nn.init.normal_(layer.weight, 0.0, scale)
             nn.init.zeros_(layer.bias)
-        for layer in [self.pred_layer2]:
+        for layer in [self.pred_layer_mean, self.pred_layer_var]:
             nn.init.zeros_(layer.weight)
             nn.init.zeros_(layer.bias)
 
@@ -203,13 +207,12 @@ class DIAMNet(nn.Module):
             nn.init.normal_(layer.weight, 0.0, scale)
             nn.init.zeros_(layer.bias)
 
-    def forward(self, pattern, pattern_len, graph, graph_len):
-        bsz = pattern_len.size(0)
+    def forward(self, pattern, graph):
         p_len, g_len = pattern.size(1), graph.size(1)
-        plf, glf = pattern_len.float(), graph_len.float()
-        inv_plf, inv_glf = 1.0 / plf, 1.0 / glf
         # p_mask = batch_convert_len_to_mask(pattern_len) if p_len == pattern_len.max() else None
         # g_mask = batch_convert_len_to_mask(graph_len) if g_len == graph_len.max() else None
+        pattern_len = torch.tensor(pattern.size(0), dtype=torch.int32).view(-1, 1)
+        graph_len = torch.tensor(graph.size(0), dtype=torch.int32).view(-1, 1)
         p_mask = batch_convert_len_to_mask(pattern_len)
         g_mask = batch_convert_len_to_mask(graph_len)
 
@@ -225,8 +228,7 @@ class DIAMNet(nn.Module):
                     m, mk = init_mem(g[idx, :graph_len[idx[0]]], g_mask[idx, :graph_len[idx[0]]],
                                      mem_len=self.mem_len, mem_init=self.mem_init, lstm=self.m_layer)
                 else:
-                    m, mk = init_mem(g[idx, :graph_len[idx[0]]], g_mask[idx, :graph_len[idx[0]]],
-                                     mem_len=self.mem_len, mem_init=self.mem_init, post_proj=self.m_layer)
+                    m, mk = init_mem(g, g_mask, mem_len=self.mem_len, mem_init=self.mem_init, post_proj=self.m_layer)
                 mem.append(m)
                 mem_mask.append(mk)
             mem = torch.cat(mem, dim=0)
@@ -235,12 +237,12 @@ class DIAMNet(nn.Module):
             mem = self.p_attn(mem, p, p, p_mask)
             mem = self.g_attn(mem, g, g, g_mask)
 
-        mem = mem.view(bsz, -1)
-        y = self.pred_layer1(torch.cat([mem, plf, glf, inv_plf, inv_glf], dim=1))
+        mem = mem.view(1, -1)
+        y = self.pred_layer1(mem)
         y = self.act(y)
-        y = self.pred_layer2(torch.cat([y, plf, glf, inv_plf, inv_glf], dim=1))
-
-        return y
+        mean = self.pred_layer_mean(y)
+        var = self.pred_layer_var(y)
+        return mean, var
 
     def increase_input_size(self, new_pattern_dim, new_graph_dim):
         assert new_pattern_dim >= self.pattern_dim and new_graph_dim >= self.graph_dim
@@ -266,9 +268,78 @@ class DIAMNet(nn.Module):
         self.graph_dim = new_graph_dim
 
 
+def init_mem(x, x_mask=None, mem_len=1, mem_init="mean", **kw):
+    assert mem_init in ["mean", "sum", "max", "attn", "lstm",
+                        "circular_mean", "circular_sum", "circular_max", "circular_attn", "circular_lstm"]
+
+    seq_len, hidden_dim = x.size()
+    if seq_len < mem_len:
+        mem = torch.cat([x, torch.zeros((mem_len - seq_len, hidden_dim), device=x.device, dtype=x.dtype)], dim=1)
+        if x_mask is not None:
+            mem_mask = torch.cat(
+                [x_mask, torch.zeros((mem_len - seq_len), device=x_mask.device, dtype=x_mask.dtype)], dim=1)
+        else:
+            mem_mask = None
+    elif seq_len == mem_len:
+        mem = torch.cat([x, torch.zeros((mem_len, hidden_dim), device=x.device, dtype=x.dtype)], dim=1)
+        mem_mask = torch.cat([x_mask, torch.zeros(mem_len, device=x_mask.device, dtype=x_mask.dtype)], dim=1)
+    else:
+        if mem_init.startswith("circular"):
+            pad_len = math.ceil((seq_len + 1) / 2) - 1
+            x = F.pad(x.transpose(1, 2), pad=(0, pad_len), mode="circular").transpose(1, 2)
+            if x_mask is not None:
+                x_mask = F.pad(x_mask.unsqueeze(1), pad=(0, pad_len), mode="circular").squeeze(1)
+            seq_len += pad_len
+        stride = seq_len // mem_len
+        kernel_size = seq_len - (mem_len - 1) * stride
+        if mem_init.endswith("mean"):
+            mem = F.avg_pool1d(x.transpose(1, 2), kernel_size=kernel_size, stride=stride).transpose(1, 2)
+        elif mem_init.endswith("max"):
+            mem = F.max_pool1d(x.transpose(1, 2), kernel_size=kernel_size, stride=stride).transpose(1, 2)
+        elif mem_init.endswith("sum"):
+            mem = F.avg_pool1d(x.transpose(1, 2), kernel_size=kernel_size, stride=stride).transpose(1, 2) * kernel_size
+        elif mem_init.endswith("attn"):
+            # split and self attention
+            mem = list()
+            attn = kw.get("attn", None)
+            hidden_dim = attn.query_dim
+            h = torch.ones((1, hidden_dim), dtype=x.dtype, device=x.device, requires_grad=False).mul_(
+                1 / (hidden_dim ** 0.5))
+            for i in range(0, seq_len - kernel_size + 1, stride):
+                j = i + kernel_size
+                m = x[:, i:j]
+                mk = x_mask[:, i:j] if x_mask is not None else None
+                if attn:
+                    h = attn(h, m, m, attn_mask=mk)
+                else:
+                    m = m.unsqueeze(2)
+                    h = get_multi_head_attn_vec(h, m, m, attn_mask=mk, act_layer=nn.Softmax(dim=-1))
+                mem.append(h)
+            mem = torch.cat(mem, dim=1)
+        elif mem_init.endswith("lstm"):
+            mem = list()
+            lstm = kw["lstm"]
+            hx = None
+            for i in range(0, seq_len - kernel_size + 1, stride):
+                j = i + kernel_size
+                m = x[:, i:j]
+                _, hx = lstm(m, hx)
+                mem.append(hx[0].view(1, -1))
+            mem = torch.cat(mem, dim=1)
+        if x_mask is not None:
+            # print(x_mask.size())
+            mem_mask = F.max_pool1d(x_mask.float().unsqueeze(1), kernel_size=kernel_size, stride=stride).squeeze(
+                1).byte()
+            # mem_mask = F.max_pool1d(x_mask.float(), kernel_size=kernel_size, stride=stride).squeeze(1).byte()
+
+        else:
+            mem_mask = None
+    return mem, mem_mask
+
+
 class GatedMultiHeadAttn(nn.Module):
     def __init__(self, query_dim, key_dim, value_dim, hidden_dim, num_heads,
-                 dropatt=0.0, act_func="softmax", add_zero_attn=False,
+                 dropatt=0.2, act_func="softmax", add_zero_attn=False,
                  pre_lnorm=False, post_lnorm=False):
         super(GatedMultiHeadAttn, self).__init__()
         assert hidden_dim % num_heads == 0
@@ -310,7 +381,7 @@ class GatedMultiHeadAttn(nn.Module):
 
     def forward(self, query, key, value, attn_mask=None):
         ##### multihead attention
-        # [bsz x hlen x num_heads x head_dim]
+        # [bsz x head_len x num_heads x head_dim]
         bsz = query.size(0)
 
         if self.add_zero_attn:

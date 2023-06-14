@@ -501,7 +501,6 @@ def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
-
 def _to_cuda(l):
     """
     put a list of tensor to gpu
@@ -518,6 +517,7 @@ def _to_dataloaders(datasets, batch_size=1, shuffle=True):
                    for dataset in datasets] if isinstance(datasets, list) \
         else [DataLoader(dataset=datasets, batch_size=batch_size, shuffle=shuffle)]
     return dataloaders
+
 
 def data_split_cv(all_sets, num_fold=5, seed=1):
     """
@@ -582,6 +582,7 @@ def print_eval_res(all_eval_res, print_details=True):
     error_median = get_prediction_statistics(all_errors)
     return error_median
 
+
 def get_prediction_statistics(errors: list):
     lower, upper = np.quantile(errors, 0.25), np.quantile(errors, 0.75)
     print("<" * 80)
@@ -593,3 +594,27 @@ def get_prediction_statistics(errors: list):
     print(">" * 80)
     error_median = abs(upper - lower)
     return error_median
+
+
+def batch_convert_len_to_mask(batch_lens, max_seq_len=-1):
+    if max_seq_len == -1:
+        max_seq_len = max(batch_lens)
+    mask = torch.ones((len(batch_lens), max_seq_len), dtype=torch.uint8, device=batch_lens[0].device,
+                      requires_grad=False)
+    for i, l in enumerate(batch_lens):
+        mask[i, l:].fill_(0)
+    return mask
+
+def gather_indices_by_lens(lens):
+    result = list()
+    i, j = 0, 1
+    max_j = len(lens)
+    indices = np.arange(0, max_j)
+    while j < max_j:
+        if lens[i] != lens[j]:
+            result.append(indices[i:j])
+            i = j
+        j += 1
+    if i != j:
+        result.append(indices[i:j])
+    return result

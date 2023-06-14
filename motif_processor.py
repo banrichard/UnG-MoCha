@@ -123,7 +123,7 @@ class QueryPreProcessing(object):
 
 
 class Queryset(object):
-    def __init__(self, dataset_name, data_dir, dataset, all_queries):
+    def __init__(self, dataset_name, data_dir, dataset, all_queries, batch_size=1):
         """
         all_queries: {(size, patten) -> [(graphs, true_card, ture_var]} // all queries subset
         """
@@ -152,6 +152,7 @@ class Queryset(object):
         self.edge_embed_dim = 0
         self.num_edge_feat = len(self.edge_label_card)
         self.all_subsets = self.transform_motif_to_tensors(all_queries)
+        self.batch_size = batch_size
         self.all_sizes = {}
         for (pattern, size), graphs_card_pairs in self.all_subsets.items():
             if size not in self.all_sizes.keys():
