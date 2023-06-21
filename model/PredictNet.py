@@ -181,8 +181,8 @@ class DIAMNet(nn.Module):
             pre_lnorm=True,
             dropatt=dropatt, act_func="softmax")
 
-        self.pred_layer1 = nn.Linear(self.mem_len * self.hidden_dim + 4, self.hidden_dim)
-        self.pred_layer_mean = nn.Linear(self.hidden_dim + 4, 1)
+        self.pred_layer1 = nn.Linear(self.mem_len * self.hidden_dim, self.hidden_dim)
+        self.pred_layer_mean = nn.Linear(self.hidden_dim, 1)
         self.pred_layer_var = nn.Linear(self.hidden_dim, 1)
         # init
         scale = 1 / (self.hidden_dim ** 0.5)
@@ -190,7 +190,7 @@ class DIAMNet(nn.Module):
             nn.init.normal_(layer.weight, 0.0, scale)
             nn.init.zeros_(layer.bias)
         for layer in [self.pred_layer_mean, self.pred_layer_var]:
-            nn.init.zeros_(layer.weight)
+            nn.init.kaiming_uniform_(layer.weight)
             nn.init.zeros_(layer.bias)
 
         if isinstance(self.m_layer, nn.LSTM):
@@ -208,29 +208,33 @@ class DIAMNet(nn.Module):
             nn.init.zeros_(layer.bias)
 
     def forward(self, pattern, graph):
+        bsz = 1
+        pattern = pattern.unsqueeze(0)
+        graph = graph.unsqueeze(0)
         p_len, g_len = pattern.size(1), graph.size(1)
         # p_mask = batch_convert_len_to_mask(pattern_len) if p_len == pattern_len.max() else None
         # g_mask = batch_convert_len_to_mask(graph_len) if g_len == graph_len.max() else None
+        # pattern_len  = (n,1) 0: batch_size 1:number of nodes in the motif
         pattern_len = torch.tensor(pattern.size(0), dtype=torch.int32).view(-1, 1)
         graph_len = torch.tensor(graph.size(0), dtype=torch.int32).view(-1, 1)
-        p_mask = batch_convert_len_to_mask(pattern_len)
-        g_mask = batch_convert_len_to_mask(graph_len)
+        p_mask = batch_convert_len_to_mask(pattern_len).to(pattern.device)
+        g_mask = batch_convert_len_to_mask(graph_len).to(graph.device)
 
         p, g = pattern, graph
         if g_mask is not None:
             mem = list()
             mem_mask = list()
-            for idx in gather_indices_by_lens(graph_len):
-                if self.mem_init.endswith("attn"):
-                    m, mk = init_mem(g[idx, :graph_len[idx[0]]], g_mask[idx, :graph_len[idx[0]]],
-                                     mem_len=self.mem_len, mem_init=self.mem_init, attn=self.m_layer)
-                elif self.mem_init.endswith("lstm"):
-                    m, mk = init_mem(g[idx, :graph_len[idx[0]]], g_mask[idx, :graph_len[idx[0]]],
-                                     mem_len=self.mem_len, mem_init=self.mem_init, lstm=self.m_layer)
-                else:
-                    m, mk = init_mem(g, g_mask, mem_len=self.mem_len, mem_init=self.mem_init, post_proj=self.m_layer)
-                mem.append(m)
-                mem_mask.append(mk)
+            # for idx in gather_indices_by_lens(graph_len):
+            if self.mem_init.endswith("attn"):
+                m, mk = init_mem(g[idx, :graph_len[idx[0]]], g_mask[idx, :graph_len[idx[0]]],
+                                 mem_len=self.mem_len, mem_init=self.mem_init, attn=self.m_layer)
+            elif self.mem_init.endswith("lstm"):
+                m, mk = init_mem(g[idx, :graph_len[idx[0]]], g_mask[idx, :graph_len[idx[0]]],
+                                 mem_len=self.mem_len, mem_init=self.mem_init, lstm=self.m_layer)
+            else:
+                m, mk = init_mem(g, g_mask, mem_len=self.mem_len, mem_init=self.mem_init, post_proj=self.m_layer)
+            mem.append(m)
+            mem_mask.append(mk)
             mem = torch.cat(mem, dim=0)
             mem_mask = torch.cat(mem_mask, dim=0)
         for i in range(self.recurrent_steps):
@@ -271,8 +275,12 @@ class DIAMNet(nn.Module):
 def init_mem(x, x_mask=None, mem_len=1, mem_init="mean", **kw):
     assert mem_init in ["mean", "sum", "max", "attn", "lstm",
                         "circular_mean", "circular_sum", "circular_max", "circular_attn", "circular_lstm"]
+    pre_proj = kw.get("pre_proj", None)
+    post_proj = kw.get("post_proj", None)
+    if pre_proj:
+        x = pre_proj(x)
 
-    seq_len, hidden_dim = x.size()
+    bsz, seq_len, hidden_dim = x.size()
     if seq_len < mem_len:
         mem = torch.cat([x, torch.zeros((mem_len - seq_len, hidden_dim), device=x.device, dtype=x.dtype)], dim=1)
         if x_mask is not None:
@@ -281,8 +289,7 @@ def init_mem(x, x_mask=None, mem_len=1, mem_init="mean", **kw):
         else:
             mem_mask = None
     elif seq_len == mem_len:
-        mem = torch.cat([x, torch.zeros((mem_len, hidden_dim), device=x.device, dtype=x.dtype)], dim=1)
-        mem_mask = torch.cat([x_mask, torch.zeros(mem_len, device=x_mask.device, dtype=x_mask.dtype)], dim=1)
+        mem, mem_mask = x, x_mask
     else:
         if mem_init.startswith("circular"):
             pad_len = math.ceil((seq_len + 1) / 2) - 1
@@ -331,9 +338,10 @@ def init_mem(x, x_mask=None, mem_len=1, mem_init="mean", **kw):
             mem_mask = F.max_pool1d(x_mask.float().unsqueeze(1), kernel_size=kernel_size, stride=stride).squeeze(
                 1).byte()
             # mem_mask = F.max_pool1d(x_mask.float(), kernel_size=kernel_size, stride=stride).squeeze(1).byte()
-
         else:
             mem_mask = None
+    if post_proj:
+        mem = post_proj(mem)
     return mem, mem_mask
 
 
@@ -383,7 +391,6 @@ class GatedMultiHeadAttn(nn.Module):
         ##### multihead attention
         # [bsz x head_len x num_heads x head_dim]
         bsz = query.size(0)
-
         if self.add_zero_attn:
             key = torch.cat([key,
                              torch.zeros((bsz, 1) + key.size()[2:], dtype=key.dtype, device=key.device)], dim=1)
@@ -507,10 +514,13 @@ class MultiHeadAttn(nn.Module):
 def get_multi_head_attn_vec(head_q, head_k, head_v, attn_mask=None, act_layer=None, dropatt=None):
     _INF = -1e30
     bsz, qlen, num_heads, head_dim = head_q.size()
+    # Q = [batch_size * qlen * num_heads * head_dim]
+    # K_T = [batch_size * klen * head_dim * num_heads]
     scale = 1 / (head_dim ** 0.5)
 
     # [bsz x qlen x klen x num_heads]
     attn_score = torch.einsum("bind,bjnd->bijn", (head_q, head_k))
+    # attn_score = torch.matmul(head_q, head_k.T)
     attn_score.mul_(scale)
     if attn_mask is not None:
         if attn_mask.dim() == 2:
@@ -528,3 +538,78 @@ def get_multi_head_attn_vec(head_q, head_k, head_v, attn_mask=None, act_layer=No
     attn_vec = torch.einsum("bijn,bjnd->bind", (attn_score, head_v))
     attn_vec = attn_vec.contiguous().view(bsz, qlen, -1)
     return attn_vec
+
+
+class BaseAttnPredictNet(nn.Module):
+    def __init__(self, pattern_dim, graph_dim, hidden_dim, num_heads=4, recurrent_steps=1, dropout=0.0, dropatt=0.0):
+        super(BaseAttnPredictNet, self).__init__()
+        self.pattern_dim = pattern_dim
+        self.grpah_dim = graph_dim
+        self.hidden_dim = hidden_dim
+        self.recurrent_steps = recurrent_steps
+
+        self.act = nn.ReLU()
+        self.drop = nn.Dropout(dropout)
+        self.p_layer = nn.Linear(pattern_dim, hidden_dim)
+        self.g_layer = nn.Linear(graph_dim, hidden_dim)
+
+        self.p_attn = GatedMultiHeadAttn(
+            query_dim=graph_dim, key_dim=pattern_dim, value_dim=pattern_dim,
+            hidden_dim=hidden_dim, num_heads=num_heads,
+            pre_lnorm=True,
+            dropatt=dropatt, act_func="softmax")
+        self.g_attn = GatedMultiHeadAttn(
+            query_dim=graph_dim, key_dim=graph_dim, value_dim=graph_dim,
+            hidden_dim=hidden_dim, num_heads=num_heads,
+            pre_lnorm=True,
+            dropatt=dropatt, act_func="softmax")
+
+        self.pred_layer1 = nn.Linear(self.hidden_dim * 4, self.hidden_dim)
+        self.pred_layer_mean = nn.Linear(self.hidden_dim, 1)
+        self.pred_layer_var = nn.Linear(self.hidden_dim, 1)
+
+        # init
+        for layer in [self.p_layer, self.g_layer, self.pred_layer1]:
+            nn.init.kaiming_normal_(layer.weight)
+            nn.init.zeros_(layer.bias)
+        for layer in [self.pred_layer_mean, self.pred_layer_var]:
+            nn.init.xavier_uniform_(layer.weight)
+            nn.init.zeros_(layer.bias)
+
+    def forward(self, pattern, graph):
+        raise NotImplementedError
+
+
+class MeanAttnPredictNet(BaseAttnPredictNet):
+    def __init__(self, pattern_dim, graph_dim, hidden_dim, num_heads=4, recurrent_steps=1, dropout=0.0, dropatt=0.0):
+        super(MeanAttnPredictNet, self).__init__(pattern_dim, graph_dim, hidden_dim, num_heads, recurrent_steps,
+                                                 dropout, dropatt)
+
+    def forward(self, pattern, graph):
+        bsz = 1
+        pattern = pattern.unsqueeze(0)
+        graph = graph.unsqueeze(0)
+        p_len, g_len = pattern.size(1), graph.size(1)
+        # p_mask = batch_convert_len_to_mask(pattern_len) if p_len == pattern_len.max() else None
+        # g_mask = batch_convert_len_to_mask(graph_len) if g_len == graph_len.max() else None
+        # pattern_len  = (n,1) 0: batch_size 1:number of nodes in the motif
+        pattern_len = torch.tensor(pattern.size(0), dtype=torch.int32).view(-1, 1)
+        graph_len = torch.tensor(graph.size(0), dtype=torch.int32).view(-1, 1)
+        p_mask = batch_convert_len_to_mask(pattern_len).to(pattern.device)
+        g_mask = batch_convert_len_to_mask(graph_len).to(graph.device)
+
+        p, g = pattern, graph
+        for i in range(self.recurrent_steps):
+            g = self.p_attn(g, p, p, p_mask)
+            g = self.g_attn(g, g, g, g_mask)
+
+        p = self.drop(self.p_layer(torch.mean(p, dim=1, keepdim=True)))
+        g = self.drop(self.g_layer(g))
+
+        p = p.squeeze(1)
+        g = torch.mean(g, dim=1)
+        y = self.pred_layer1(torch.cat([p, g, g - p, g * p], dim=1))
+        y = self.act(y)
+        mean = self.pred_layer_mean(y)
+        var = self.pred_layer_var(y)
+        return mean, var

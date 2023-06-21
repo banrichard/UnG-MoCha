@@ -7,7 +7,7 @@ import networkx as nx
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-
+# from torch_geometric.data import Dataset, DataLoader
 from utils.graph_operator import load_graph
 
 
@@ -328,3 +328,13 @@ def _to_dataloaders(datasets, batch_size=1, shuffle=True):
                    for dataset in datasets] if isinstance(datasets, list) \
         else [DataLoader(dataset=datasets, batch_size=batch_size, shuffle=shuffle)]
     return dataloaders
+
+
+def collate(batch):
+    motif_len = torch.tensor([motif['x'] for motif in batch]).view(-1, 1)
+    motif_edge_len = torch.tensor([motif['edge_attr'] for motif in batch]).view(-1, 1)
+    max_node_len = torch.max(motif_len)
+    max_edge_len = torch.max(motif_edge_len)
+    bsz = motif_len.size(0)
+
+    # return x, edge_index, edge_attr

@@ -4,7 +4,7 @@ import torch.nn as nn
 
 from model.Embedding import Embedding
 from model.MLP import MLP
-from model.PredictNet import FilmSumPredictNet, DIAMNet
+from model.PredictNet import FilmSumPredictNet, DIAMNet, MeanAttnPredictNet
 from utils.utils import get_enc_len, int2onehot
 
 
@@ -178,9 +178,8 @@ class GraphModel(nn.Module):
         elif predict_type == "MeanAttnPredictNet":
             hidden_dim = kw.get("hidden_dim", 64)
             recurrent_steps = kw.get("recurrent_steps", 1)
-            num_heads = kw.get("num_heads", 1)
+            num_heads = kw.get("num_heads", 4)
             predict_net = MeanAttnPredictNet(pattern_dim, graph_dim, hidden_dim,
-                                             act_func=self.act_func,
                                              num_heads=num_heads, recurrent_steps=recurrent_steps,
                                              dropout=self.dropout, dropatt=self.dropatt)
         elif predict_type == "SumAttnPredictNet":
@@ -232,7 +231,7 @@ class GraphModel(nn.Module):
         elif predict_type == "DIAMNet":
             hidden_dim = kw.get("hidden_dim", 64)
             recurrent_steps = kw.get("recurrent_steps", 1)
-            num_heads = kw.get("num_heads", 1)
+            num_heads = kw.get("num_heads", 4)
             mem_len = kw.get("mem_len", 1)
             mem_init = kw.get("mem_init", "mean")
             predict_net = DIAMNet(pattern_dim, graph_dim, hidden_dim,

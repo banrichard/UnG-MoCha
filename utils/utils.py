@@ -18,7 +18,7 @@ import numpy as np
 import networkx as nx
 from tqdm import tqdm
 
-from utils.batch import Batch
+from .batch import Batch
 
 
 def nodes_to_subgraphs(data):
@@ -597,6 +597,7 @@ def get_prediction_statistics(errors: list):
 
 
 def batch_convert_len_to_mask(batch_lens, max_seq_len=-1):
+    # batch_lens [n,1]
     if max_seq_len == -1:
         max_seq_len = max(batch_lens)
     mask = torch.ones((len(batch_lens), max_seq_len), dtype=torch.uint8, device=batch_lens[0].device,

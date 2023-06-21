@@ -18,7 +18,8 @@ from motif_processor import QueryPreProcessing, Queryset, _to_datasets
 from utils.loss_cal import bp_compute_large10_abmae, bp_compute_abmae
 from utils.utils import anneal_fn, _to_cuda, _to_dataloaders, data_split_cv, print_eval_res, \
     get_linear_schedule_with_warmup
-from utils.graph_operator import load_graph, k_hop_induced_subgraph, random_walk_on_subgraph, create_batch
+from utils.graph_operator import load_graph, k_hop_induced_subgraph, random_walk_on_subgraph, create_batch, \
+    k_hop_induced_subgraph_edge, random_walk_on_subgraph_edge
 from utils.batch import Batch
 
 warnings.filterwarnings("ignore")
@@ -54,21 +55,21 @@ train_config = {
     "bp_loss_slp": "anneal_cosine$1.0$0.01",  # 0, 0.01, logistic$1.0$0.01, linear$1.0$0.01, cosine$1.0$0.01,
     # cyclical_logistic$1.0$0.01, cyclical_linear$1.0$0.01, cyclical_cosine$1.0$0.01
     # anneal_logistic$1.0$0.01, anneal_linear$1.0$0.01, anneal_cosine$1.0$0.01
-    "lr": 0.00004,
+    "lr": 0.0004,
     "weight_decay": 0.0005,
-    "weight_decay_var": 0.01,
+    "weight_decay_var": 0.1,
     "weight_decay_film": 0.0001,
-    "decay_factor": 0.1,
-    "decay_patience": 50,
+    "decay_factor": 0.7,
+    "decay_patience": 20,
     "max_grad_norm": 8,
 
     "model": "EDGEMEAN",  # CNN, RNN, TXL, RGCN, RGIN, RSIN
     "motif_net": "NNGINConcat",
-    "graph_net": "GINE",
+    "graph_net": "GIN",
     "emb_dim": 128,
     "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
 
-    "predict_net": "DIAMNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
+    "predict_net": "MeanAttnPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
     # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,
     # MeanMemAttnPredictNet, SumMemAttnPredictNet, MaxMemAttnPredictNet,
     # DIAMNet
@@ -120,10 +121,15 @@ def data_graph_transform(data_dir, dataset, dataset_name, h=1):
     graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
                        emb_path="dataset/krogan/embedding/krogan_core.csv")
     candidate_sets = {}
-    for node in range(graph.number_of_nodes()):
-        subgraph = k_hop_induced_subgraph(graph, node)
-        candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
-    batch = create_batch(graph, candidate_sets, emb="dataset/krogan/embedding/krogan_core.csv")
+    # for node in range(graph.number_of_nodes()):
+    #     subgraph = k_hop_induced_subgraph(graph, node)
+    #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
+    cnt = 0
+    for edge in graph.edges(data=True):
+        subgraph = k_hop_induced_subgraph_edge(graph, edge)
+        candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
+        cnt += 1
+    batch = create_batch(graph, candidate_sets, emb="dataset/krogan/embedding/krogan_core.csv", edge_base=True)
     return batch
 
 
@@ -159,7 +165,9 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
     bp_crit_var = lambda pred, target: F.mse_loss(F.leaky_relu(pred), target)
     # config['init_pe_dim'] = graph.edge_attr.size(1)
     if bottleneck:
-        model.load_state_dict(torch.load(os.path.join(save_model_dir, 'best_epoch.pt')))
+        model.load_state_dict(
+            torch.load(os.path.join(save_model_dir, 'best_epoch_{:s}_{:s}.pt'.format(train_config['predict_net'],
+                                                                                     train_config['graph_net']))))
     model.to(device)
     model.train()
     total_time = 0
@@ -180,7 +188,16 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
         #     motif_x, motif_edge_index, motif_edge_attr = \
         #         _to_cuda(motif_x), _to_cuda(motif_edge_index), _to_cuda(motif_edge_attr)
         #     card, var = card.cuda(), var.cuda()
-        pred, pred_var, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
+        if config['predict_net'].startswith("Film"):
+            pred, pred_var, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
+            bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) + config[
+                'weight_decay_var'] * bp_crit(
+                pred_var, var) + train_config[
+                          "weight_decay_film"] * filmreg
+        else:
+            pred, pred_var = model(motif_x, motif_edge_index, motif_edge_attr, graph)
+            bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) + config['weight_decay_var'] * bp_crit(
+                pred_var, var)
         reg_loss = (1 - config['weight_decay_var']) * reg_crit(pred, card) + config[
             'weight_decay_var'] * reg_crit(
             pred_var, var)
@@ -191,13 +208,14 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
             bp_loss_slp, l0, l1 = config["bp_loss_slp"].rsplit("$", 3)
             neg_slp = anneal_fn(bp_loss_slp, i + epoch * epoch_step, T=total_step // 4, lambda0=float(l0),
                                 lambda1=float(l1))
-        bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) + config[
-            'weight_decay_var'] * bp_crit(
-            pred_var, var) + train_config[
-                      "weight_decay_film"] * filmreg
+        # bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) + config[
+        #     'weight_decay_var'] * bp_crit(
+        #     pred_var, var) + train_config[
+        #               "weight_decay_film"] * filmreg
         # filmloss=(torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
         # bp_loss+=0.00001*filmloss
         # float
+        bp_loss.backward()
         var_loss_item = bp_crit(pred_var, var).item()
         reg_loss_item = reg_loss.item()
         bp_loss_item = bp_loss.item()
@@ -216,10 +234,9 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
                     int(epoch), int(config["epochs"]), data_type, int(i / config['batch_size']),
                     int(epoch_step / config['batch_size']),
                     float(reg_loss_item), float(bp_loss_item),
-                    float(card), float(pred[0].item())))
-        bp_loss.backward()
+                    float(var), float(pred_var[0].item())))
 
-        if (config["update_every"] < 2 or i % config["batch_size"] == 0 or i == epoch_step - 1):
+        if (config["update_every"] < 2 or (i + 1) % config["batch_size"] == 0 or i == epoch_step - 1):
             if config["max_grad_norm"] > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config["max_grad_norm"])
             optimizer.step()
@@ -227,15 +244,18 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
         e = time.time()
         total_time += e - s
         total_cnt += 1
-    mean_var_loss = total_var_loss / total_cnt
-    mean_reg_loss = total_reg_loss / total_cnt
+    # mean_var_loss = total_var_loss / total_cnt
+    # mean_reg_loss = total_reg_loss / total_cnt
+    # mean_bp_loss = total_bp_loss / total_cnt
     mean_bp_loss = total_bp_loss / total_cnt
+    mean_reg_loss = total_reg_loss / total_cnt
+    mean_var_loss = total_var_loss / total_cnt
     if writer:
         writer.add_scalar("%s/REG-%s-epoch" % (data_type, config["reg_loss"]), mean_reg_loss, epoch)
         writer.add_scalar("%s/BP-%s-epoch" % (data_type, config["bp_loss"]), mean_bp_loss, epoch)
         writer.add_scalar("%s/Var-%s-epoch" % (data_type, config['bp_loss']), mean_var_loss, epoch)
     if logger:
-        logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\treg loss: {:.4f}\tbp loss: {:0.4f}".format(
+        logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\treg loss: {:.4f}\tbp loss: {:.4f}".format(
             epoch, config["epochs"], data_type, mean_reg_loss, mean_bp_loss))
 
     gc.collect()
@@ -293,24 +313,31 @@ def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=N
 
             evaluate_results["mean"]["count"].extend(card.view(-1).tolist())
             evaluate_results["var"]["var_t"].extend(var.view(-1).tolist())
-            st = time.time()
-            pred, pred_var, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
+            if config['predict_net'].startswith("Film"):
+                st = time.time()
+                pred, pred_var, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
+                pred = pred.cpu()
+                pred_var = pred_var.cpu()
+                bp_loss = bp_crit(pred, card) \
+                          + config['weight_decay_var'] * bp_crit(pred_var, var) \
+                          + train_config["weight_decay_film"] * filmreg
+            else:
+                st = time.time()
+                pred, pred_var = model(motif_x, motif_edge_index, motif_edge_attr, graph)
+                pred = pred.cpu()
+                pred_var = pred_var.cpu()
+                bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) + config['weight_decay_var'] * bp_crit(
+                    pred_var, var)
             et = time.time()
             # pred,alpha,beta = model(pattern, pattern_len, pattern_e_len, graph, graph_len, graph_e_len)
             evaluate_results["time"]["total"] += (et - st)
             avg_t = (et - st)
-            pred = pred.cpu()
-            pred_var = pred_var.cpu()
+
             evaluate_results["time"]["avg"].extend([avg_t])
             evaluate_results["mean"]["pred_mean"].extend(pred.view(-1).tolist())
             evaluate_results['var']['pred_var'].extend(pred_var.view(-1).tolist())
-
             reg_loss = (1 - config['weight_decay_var']) * reg_crit(pred, card) \
                        + config['weight_decay_var'] * reg_crit(pred_var, var)
-            bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) \
-                      + config['weight_decay_var'] * bp_crit(pred_var, var) \
-                      + train_config["weight_decay_film"] * filmreg
-
             reg_loss_item = reg_loss.mean().item()
             var_loss_item = bp_crit(pred_var, var).item()
             bp_loss_item = bp_loss.mean().item()
@@ -325,12 +352,12 @@ def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=N
                     "epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\tbatch: {:d}/{:d}\treg loss: {:.4f}\tbp loss: {:.4f}\tground: {:.4f}\tpredict: {:.4f}".format(
                         int(epoch), int(config["epochs"]), (data_type), int(batch_id), int(epoch_step),
                         float(reg_loss_item), float(bp_loss_item),
-                        float(card), float(pred[0].item())))
+                        float(var), float(pred_var[0].item())))
             et = time.time()
             total_time += et - st
             total_cnt += 1
-        mean_reg_loss = total_reg_loss / total_cnt
         mean_bp_loss = total_bp_loss / total_cnt
+        mean_reg_loss = total_reg_loss / total_cnt
         mean_var_loss = total_var_loss / total_cnt
         if logger and config['test_only'] is False:
             logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\treg loss: {:.4f}\tbp loss: {:.4f}".format(
@@ -361,7 +388,7 @@ def cross_validate(model, query_set, device, config, graph, logger=None, writer=
                                      weight_decay=config["weight_decay"],
                                      )
         optimizer.zero_grad()
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=config[''])
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=config['decay_factor'])
         mean_reg_loss, mean_bp_loss, fold_elapse_time = train(model=model, optimizer=optimizer, scheduler=scheduler,
                                                               device=device,
                                                               data_type="train",
@@ -407,7 +434,9 @@ def cross_validate(model, query_set, device, config, graph, logger=None, writer=
 def test(save_model_dir, test_loaders, config, graph, logger, writer):
     # global loader_idx, mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, _time, f
     total_test_time = 0
-    model.load_state_dict(torch.load(os.path.join(save_model_dir, 'best_epoch.pt')))
+    model.load_state_dict(torch.load(
+        os.path.join(save_model_dir,
+                     'best_epoch_{:s}_{:s}_edge.pt'.format(config['predict_net'], config['graph_net']))))
     # print(model)
     for loader_idx, data_loader in enumerate(test_loaders):
         mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, _time = evaluate(model=model, data_type="test",
@@ -422,7 +451,10 @@ def test(save_model_dir, test_loaders, config, graph, logger, writer):
         logger.info(
             "data_type: {:<5s}\tbest mean loss: {:.3f}".format("test", mean_reg_loss))
         with open(os.path.join(save_model_dir,
-                               '%s_%s_%d.json' % (train_config['motif_net'], "best_test", loader_idx)), "w") as f:
+                               '%s_%s_%s_%d_edge.json' % (
+                                       train_config['predict_net'], train_config['graph_net'], "best_test",
+                                       loader_idx)),
+                  "w") as f:
             json.dump(evaluate_results, f)
 
     return evaluate_results, total_test_time
@@ -520,8 +552,8 @@ if __name__ == "__main__":
     # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.001)
     # scheduler = get_linear_schedule_with_warmup(optimizer,
     # len(train_loaders), train_config["epochs"]*len(train_loaders), min_percent=0.0001)
-    best_bp_losses = {"train": INF, "val": INF, "test": INF}
-    best_reg_losses = {0: INF, 1: INF, 2: INF}
+    best_bp_losses = INF
+    best_reg_losses = INF
     best_reg_epochs = {"train": -1, "val": -1, "test": -1}
     best_bp_epochs = {"train": -1, "val": -1, "test": -1}
     torch.backends.cudnn.benchmark = True
@@ -548,6 +580,11 @@ if __name__ == "__main__":
         if scheduler and (epoch + 1) % train_config['decay_patience'] == 0:
             scheduler.step()
             # torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
+        val_mean_reg = 0
+        val_mean_bp = 0
+        val_mean_var = 0
+        val_total_time = 0
+        total_eval_res ={}
         for loader_idx, dataloader in enumerate(val_loaders):
             mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, total_time = evaluate(model=model,
                                                                                                 data_type="val",
@@ -556,11 +593,16 @@ if __name__ == "__main__":
                                                                                                 graph=graph,
                                                                                                 logger=logger,
                                                                                                 writer=writer)
-            if writer:
-                writer.add_scalar("%s/REG-%s-epoch" % ("val", train_config["reg_loss"]), mean_reg_loss, epoch)
-                writer.add_scalar("%s/BP-%s-epoch" % ("val", train_config["bp_loss"]), mean_bp_loss, epoch)
-                writer.add_scalar("%s/Var-%s-epoch" % ("val", train_config['bp_loss']), mean_var_loss, epoch)
-            total_dev_time += total_time
+            val_mean_reg += mean_reg_loss
+            val_mean_var += mean_var_loss
+            val_mean_bp += mean_bp_loss
+            val_total_time += total_time
+            total_eval_res[loader_idx] = evaluate_results
+        if writer:
+            writer.add_scalar("%s/REG-%s-epoch" % ("val", train_config["reg_loss"]), val_mean_reg/2, epoch)
+            writer.add_scalar("%s/BP-%s-epoch" % ("val", train_config["bp_loss"]), val_mean_bp/2, epoch)
+            writer.add_scalar("%s/Var-%s-epoch" % ("val", train_config['bp_loss']), val_mean_var/2, epoch)
+            total_dev_time += val_total_time
             # cur_reg_loss[loader_idx] = mean_reg_loss
             # flag = True
             # for key1, key2 in zip(cur_reg_loss.keys(), best_reg_losses.keys()):
@@ -570,17 +612,19 @@ if __name__ == "__main__":
             #     for key1, key2 in zip(cur_reg_loss.keys(), best_reg_losses.keys()):
             #         best_reg_losses[key2] = cur_reg_loss[key1]
             #     best_reg_epochs['val'] = epoch
-            if mean_reg_loss <= best_reg_losses[loader_idx]:
-                best_reg_losses[loader_idx] = mean_reg_loss
-                best_reg_epochs['val'] = epoch
-                logger.info(
-                    "data_type: {:<5s}\tnode_num:{:d}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format("val",
-                                                                                                       loader_idx + 3,
-                                                                                                       mean_reg_loss,
-                                                                                                       epoch))
-                torch.save(model.state_dict(), os.path.join(save_model_dir, 'best_epoch.pt'))
-            with open(os.path.join(save_model_dir, '%s_%d_%d.json' % ("val", loader_idx, epoch)), "w") as f:
-                json.dump(evaluate_results, f)
+        if val_mean_reg <= best_reg_losses:
+            best_reg_losses = val_mean_reg
+            best_reg_epochs['val'] = epoch
+            logger.info(
+                "data_type: {:<5s}\t\tbest mean loss: {:.3f} (epoch: {:0>3d})".format("val",
+                                                                                      val_mean_reg,
+                                                                                      epoch))
+            torch.save(model.state_dict(),
+                       os.path.join(save_model_dir,
+                                    'best_epoch_{:s}_{:s}_edge.pt'.format(train_config['predict_net'],
+                                                                          train_config['graph_net'])))
+            with open(os.path.join(save_model_dir, '%s_%d.json' % ("val", epoch)), "w") as f:
+                json.dump(total_eval_res, f)
                 # for data_type in data_loaders.keys():
                 #     logger.info(
                 #         "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(data_type,
