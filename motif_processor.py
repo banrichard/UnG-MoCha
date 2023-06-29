@@ -7,6 +7,8 @@ import networkx as nx
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
+from torch_geometric.data import Data
+
 # from torch_geometric.data import Dataset, DataLoader
 from utils.graph_operator import load_graph
 
@@ -24,7 +26,7 @@ class QueryPreProcessing(object):
         self.true_card_load_path = os.path.join(self.data_dir, self.dataset, self.true_card_dir)
         self.num_queries = 0
         # preserve the undecomposed queries
-        self.all_queries = {}  # {(size, patten) -> [(graph, card)]}
+        self.all_queries = []  # {(size, patten) -> [(graph, card)]}
         self.lower_card = 10 ** 0
         self.upper_card = 10 ** 20
 
@@ -35,7 +37,6 @@ class QueryPreProcessing(object):
             if not os.path.isdir(queries_dir):
                 continue
             pattern, size = subset_dir.split("_")[0], int(subset_dir.split("_")[1])  # Chain(pattern)_size
-            self.all_queries[(pattern, size)] = []
             for query_dir in os.listdir(queries_dir):
                 query_load_path = os.path.join(self.queryset_load_path, subset_dir, query_dir)
                 card_load_path = os.path.join(self.true_card_load_path, subset_dir, query_dir)
@@ -48,7 +49,7 @@ class QueryPreProcessing(object):
                 if true_card >= self.upper_card or true_card < self.lower_card:
                     continue
                 true_card = true_card + 1 if true_card == 0 else true_card
-                self.all_queries[(pattern, size)].append((query, true_card, true_var))
+                self.all_queries.append((query, true_card, true_var))
                 self.num_queries += 1
                 # save the decomposed query
                 query_save_path = os.path.splitext(query_load_path)[0] + ".pickle"
@@ -153,30 +154,22 @@ class Queryset(object):
         self.num_edge_feat = len(self.edge_label_card)
         self.all_subsets = self.transform_motif_to_tensors(all_queries)
         self.batch_size = batch_size
-        self.all_sizes = {}
-        for (pattern, size), graphs_card_pairs in self.all_subsets.items():
-            if size not in self.all_sizes.keys():
-                self.all_sizes[size] = []
-            self.all_sizes[size] += graphs_card_pairs
 
         self.num_train_queries, self.num_val_queries, self.num_test_queries = 0, 0, 0
-        train_sets, val_sets, test_sets, all_train_sets = self.data_split(self.all_sizes, train_ratio=0.8,
-                                                                          val_ratio=0.1)
+        train_sets, val_sets, test_sets = self.data_split(self.all_subsets, train_ratio=0.8,
+                                                          val_ratio=0.1)
         self.train_loaders = self.to_dataloader(all_sets=train_sets)
         self.val_loaders = self.to_dataloader(all_sets=val_sets)
         self.test_loaders = self.to_dataloader(all_sets=test_sets)
-        self.all_train_loaders = self.to_dataloader(all_sets=all_train_sets)
-        self.train_sets, self.val_sets, self.test_sets, self.all_train_sets = train_sets, val_sets, test_sets, all_train_sets
+        self.train_sets, self.val_sets, self.test_sets = train_sets, val_sets, test_sets
 
     def transform_motif_to_tensors(self, all_queries):
-        tmp_subsets = {}
-        for (pattern, size), graphs_card_pairs in all_queries.items():
-            tmp_subsets[(pattern, size)] = []
-            for (motif, card, var) in graphs_card_pairs:
-                decomp_x, decomp_edge_index, decomp_edge_weight = \
-                    self._get_motif_data(motif)
-                tmp_subsets[(pattern, size)].append((decomp_x, decomp_edge_index, decomp_edge_weight, card, var))
-                self.num_queries += 1
+        tmp_subsets = []
+
+        for (motif, card, var) in all_queries:
+            decomp_x, decomp_edge_index, decomp_edge_weight = self._get_motif_data(motif)
+            tmp_subsets.append([decomp_x, decomp_edge_index, decomp_edge_weight, card, var])
+            self.num_queries += 1
 
         return tmp_subsets
 
@@ -268,26 +261,25 @@ class Queryset(object):
         assert train_ratio + val_ratio <= 1.0, "Error data split ratio!"
         random.seed(seed)
         train_sets, val_sets, test_sets = [], [], []
-        all_train_sets = [[]]
-        for key in sorted(all_sets.keys()):
-            num_instances = len(all_sets[key])
-            random.shuffle(all_sets[key])
-            train_sets.append(all_sets[key][: int(num_instances * train_ratio)])
-            # merge to all_train_sets
-            all_train_sets[-1] = all_train_sets[-1] + train_sets[-1]
-            val_sets.append(
-                all_sets[key][int(num_instances * train_ratio): int(num_instances * (train_ratio + val_ratio))])
-            test_sets.append(all_sets[key][int(num_instances * (train_ratio + val_ratio)):])
-            self.num_train_queries += len(train_sets[-1])
-            self.num_val_queries += len(val_sets[-1])
-            self.num_test_queries += len(test_sets[-1])
-        return train_sets, val_sets, test_sets, all_train_sets
+
+        num_instances = len(all_sets)
+        random.shuffle(all_sets)
+        train_sets = all_sets[: int(num_instances * train_ratio)]
+        # merge to all_train_sets
+        val_sets = all_sets[int(num_instances * train_ratio): int(num_instances * (train_ratio + val_ratio))]
+        test_sets = all_sets[int(num_instances * (train_ratio + val_ratio)):]
+        self.num_train_queries += len(train_sets[-1])
+        self.num_val_queries += len(val_sets[-1])
+        self.num_test_queries += len(test_sets[-1])
+        return train_sets, val_sets, test_sets
 
     def to_dataloader(self, all_sets, batch_size=1, shuffle=True):
-        datasets = [QueryDataset(queries=queries)
-                    for queries in all_sets]
-        dataloaders = [DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
-                       for dataset in datasets]
+        # datasets = [QueryDataset(queries=queries)
+        #             for queries in all_sets]
+        dataset = QueryDataset(queries=all_sets)
+        # dataloaders = [DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
+        #                for dataset in datasets]
+        dataloaders = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
         return dataloaders
 
 
@@ -320,21 +312,88 @@ def _to_datasets(all_sets):
     return datasets
 
 
-def _to_dataloaders(datasets, batch_size=1, shuffle=True):
+def collate(data_list):
+    batch_x_list = []
+    batch_edge_index_list = []
+    batch_edge_attr_list = []
+    batch_masks = []
+    batch_edge_masks = []
+    # Find the maximum sizes among samples
+    max_x_size = max([data[0].size(0) for data in data_list])
+    max_edge_index_size = max([data[1].size(1) for data in data_list])
+    max_edge_attr_size = max([data[2].size(0) for data in data_list])
+
+    # Perform padding and create batched tensors
+    for data in data_list:
+        # Pad x tensor
+        padding_x = torch.zeros(max_x_size - data[0].size(0), *data[0].size()[1:], dtype=data[0].dtype)
+        batch_x = torch.cat([data[0], padding_x], dim=0).unsqueeze(0)
+        batch_x_list.append(batch_x)
+
+        # Pad edge_index tensor
+        padding_edge_index = torch.zeros(2, max_edge_index_size - data[1].size(1), dtype=data[1].dtype)
+        batch_edge_index = torch.cat([data[1], padding_edge_index], dim=1).unsqueeze(0)
+        batch_edge_index_list.append(batch_edge_index)
+        edge_masks = torch.cat([torch.ones(data[1].size(1)), torch.zeros(padding_edge_index.size(1))], dim=0)
+        batch_edge_masks.append(edge_masks.unsqueeze(0))
+        # Pad edge_attr tensor
+        padding_edge_attr = torch.zeros(max_edge_attr_size - data[2].size(0), *data[2].size()[1:],
+                                        dtype=data[2].dtype)
+        batch_edge_attr = torch.cat([data[2], padding_edge_attr], dim=0).unsqueeze(0)
+        batch_edge_attr_list.append(batch_edge_attr)
+
+        # Create mask matrix
+        mask = torch.cat([torch.ones(data[0].size(0)), torch.zeros(padding_x.size(0))], dim=0)
+        batch_masks.append(mask.unsqueeze(0))
+
+    # Concatenate batched tensors
+    batch_x = torch.cat(batch_x_list, dim=0)
+    batch_edge_index = torch.cat(batch_edge_index_list, dim=0)
+    batch_edge_attr = torch.cat(batch_edge_attr_list, dim=0)
+    batch_masks = torch.cat(batch_masks, dim=0)
+    batch_edge_masks = torch.cat(batch_edge_masks, dim=0)
+    # Create a new batched Data object
+    batch = Data(x=batch_x, edge_index=batch_edge_index, edge_attr=batch_edge_attr)
+    batch.masks = batch_masks
+    batch.edge_masks = batch_edge_masks
+    return batch
+    # return x, edge_index, edge_attr
+
+
+def _to_dataloaders(dataset, batch_size=1, shuffle=True):
     """
     create a lists of torch dataloader from datasets
     """
-    dataloaders = [DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
-                   for dataset in datasets] if isinstance(datasets, list) \
-        else [DataLoader(dataset=datasets, batch_size=batch_size, shuffle=shuffle)]
+    dataloaders = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate)
     return dataloaders
 
 
-def collate(batch):
-    motif_len = torch.tensor([motif['x'] for motif in batch]).view(-1, 1)
-    motif_edge_len = torch.tensor([motif['edge_attr'] for motif in batch]).view(-1, 1)
-    max_node_len = torch.max(motif_len)
-    max_edge_len = torch.max(motif_edge_len)
-    bsz = motif_len.size(0)
+if __name__ == "__main__":
+    QD = QueryPreProcessing(queryset_dir="queryset", true_card_dir="label",
+                            dataset="krogan")
+    # decompose the query
+    QD.decomose_queries()
+    all_subsets = QD.all_queries
 
-    # return x, edge_index, edge_attr
+    QS = Queryset(dataset_name="krogan_core.txt", data_dir="dataset",
+                  dataset="krogan", all_queries=all_subsets)
+    train_loaders = QS.train_loaders
+    for i, batch in enumerate(train_loaders):
+        print(batch)
+    # train_loader = _to_dataloaders(QS.train_sets, batch_size=16)
+    # for batch in train_loader:
+    #     # Access the batched data
+    #     batch_x = batch.x  # Batched x tensor
+    #     batch_edge_index = batch.edge_index  # Batched edge_index tensor
+    #     batch_edge_attr = batch.edge_attr  # Batched edge_attr tensor
+    #     batch_masks = batch.masks  # Batched mask matrix
+    #     batch_edge_masks = batch.edge_masks
+    #     # Perform operations on the batched data
+    #     # ...
+    #
+    #     # Print the shapes of the batched tensors
+    #     print(f"Batch x shape: {batch_x.shape}")
+    #     print(f"Batch edge_index shape: {batch_edge_index.shape}")
+    #     print(f"Batch edge_attr shape: {batch_edge_attr.shape}")
+    #     print(f"Batch masks shape: {batch_masks.shape}")
+    #     print()

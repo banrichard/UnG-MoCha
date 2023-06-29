@@ -84,7 +84,7 @@ class BasePoolPredictNet(nn.Module):
             nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
             nn.init.zeros_(layer.bias)
 
-    def forward(self, pattern, pattern_len, graph, graph_len):
+    def forward(self, pattern, graph):
         raise NotImplementedError
 
     def increase_input_size(self, new_pattern_dim, new_graph_dim):
@@ -225,14 +225,7 @@ class DIAMNet(nn.Module):
             mem = list()
             mem_mask = list()
             # for idx in gather_indices_by_lens(graph_len):
-            if self.mem_init.endswith("attn"):
-                m, mk = init_mem(g[idx, :graph_len[idx[0]]], g_mask[idx, :graph_len[idx[0]]],
-                                 mem_len=self.mem_len, mem_init=self.mem_init, attn=self.m_layer)
-            elif self.mem_init.endswith("lstm"):
-                m, mk = init_mem(g[idx, :graph_len[idx[0]]], g_mask[idx, :graph_len[idx[0]]],
-                                 mem_len=self.mem_len, mem_init=self.mem_init, lstm=self.m_layer)
-            else:
-                m, mk = init_mem(g, g_mask, mem_len=self.mem_len, mem_init=self.mem_init, post_proj=self.m_layer)
+            m, mk = init_mem(g, g_mask, mem_len=self.mem_len, mem_init=self.mem_init, post_proj=self.m_layer)
             mem.append(m)
             mem_mask.append(mk)
             mem = torch.cat(mem, dim=0)
@@ -612,4 +605,22 @@ class MeanAttnPredictNet(BaseAttnPredictNet):
         y = self.act(y)
         mean = self.pred_layer_mean(y)
         var = self.pred_layer_var(y)
+        return mean, var
+
+
+class MeanPredictNet(BasePoolPredictNet):
+    def __init__(self, pattern_dim, graph_dim, hidden_dim, dropout=0.0):
+        super(MeanPredictNet, self).__init__(pattern_dim, graph_dim, hidden_dim, dropout)
+
+    def forward(self, pattern, graph):
+        pattern = pattern.unsqueeze(0)
+        graph = graph.unsqueeze(0)
+        p = self.drop(self.p_layer(torch.mean(pattern, dim=1, keepdim=True)))
+        g = self.drop(self.g_layer(graph))
+        p = p.squeeze(1)
+        g = torch.mean(g, dim=1)
+        y = self.pred_layer1(torch.cat([p, g, g - p, g * p], dim=1))
+        y = self.act(y)
+        mean = self.pred_mean(y)
+        var = self.pred_var(y)
         return mean, var

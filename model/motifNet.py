@@ -153,7 +153,8 @@ class MotifGNN(nn.Module):
                 node_nn=nn.Sequential(nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)))
         elif model_type == "NNGINConcat":
             return lambda in_ch, hid_ch, e_hid_ch: NNGINConcatConv(
-                edge_nn=nn.Sequential(nn.Linear(self.num_edge_feat, e_hid_ch), nn.ReLU(), nn.Linear(e_hid_ch, e_hid_ch)),
+                edge_nn=nn.Sequential(nn.Linear(self.num_edge_feat, e_hid_ch), nn.ReLU(),
+                                      nn.Linear(e_hid_ch, e_hid_ch)),
                 node_nn=nn.Sequential(nn.Linear(in_ch + e_hid_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)))
         elif model_type == "GAT":
             return GATConv
@@ -169,7 +170,7 @@ class MotifGNN(nn.Module):
     def reset_parameters(self):
         torch.nn.init.xavier_uniform_(self.agg.weight)
 
-    def forward(self, x, edge_index, edge_attr=None):
+    def forward(self, x, edge_index, edge_attr=None,):
         x, edge_index, edge_attr = x.squeeze(0), edge_index.squeeze(0), edge_attr.squeeze(0)
         x = x.cuda(0)
         edge_index = edge_index.cuda(0)

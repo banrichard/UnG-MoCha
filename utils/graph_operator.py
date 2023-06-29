@@ -19,8 +19,6 @@ import torch.nn.functional as F
 
 def load_graph(filepath, emb_path=None) -> nx.Graph:
     nx_graph = nx.Graph()
-    # print(nx_graph.number_of_edges())
-    node_fea = None
     edges = []
     graph_data = pd.read_csv(filepath, header=None, skiprows=1, delimiter=" ")
     for i in range(len(graph_data)):
@@ -28,8 +26,11 @@ def load_graph(filepath, emb_path=None) -> nx.Graph:
     nx_graph.add_edges_from(edges)
     if emb_path is not None:
         node_fea = np.loadtxt(emb_path, delimiter=" ")[:, 1:]
-        for i in range(nx_graph.number_of_nodes()):
-            nx_graph.add_node(i, x=node_fea[i])
+    else:
+        node_fea = np.zeros(nx_graph.number_of_nodes(), 128)
+    for i in range(nx_graph.number_of_nodes()):
+        nx_graph.add_node(i, x=node_fea[i])
+
     return nx_graph
 
 

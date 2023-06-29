@@ -69,7 +69,7 @@ train_config = {
     "emb_dim": 128,
     "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
 
-    "predict_net": "MeanAttnPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
+    "predict_net": "MeanPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
     # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,
     # MeanMemAttnPredictNet, SumMemAttnPredictNet, MaxMemAttnPredictNet,
     # DIAMNet
@@ -199,8 +199,7 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
             bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) + config['weight_decay_var'] * bp_crit(
                 pred_var, var)
         reg_loss = (1 - config['weight_decay_var']) * reg_crit(pred, card) + config[
-            'weight_decay_var'] * reg_crit(
-            pred_var, var)
+            'weight_decay_var'] * reg_crit(pred_var, var)
 
         if isinstance(config["bp_loss_slp"], (int, float)):
             neg_slp = float(config["bp_loss_slp"])
@@ -236,7 +235,7 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
                     float(reg_loss_item), float(bp_loss_item),
                     float(var), float(pred_var[0].item())))
 
-        if (config["update_every"] < 2 or (i + 1) % config["batch_size"] == 0 or i == epoch_step - 1):
+        if (i + 1) % config["batch_size"] == 0 or i == epoch_step - 1:
             if config["max_grad_norm"] > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), config["max_grad_norm"])
             optimizer.step()
@@ -309,8 +308,8 @@ def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=N
     model.eval()
     total_time = 0
     with torch.no_grad():
-        for batch_id, (motif_x, motif_edge_index, motif_edge_attr, card, var) in enumerate(data_loader):
-
+        for batch_id, batch in enumerate(data_loader):
+            motif_x, motif_edge_index, motif_edge_attr, card, var = batch
             evaluate_results["mean"]["count"].extend(card.view(-1).tolist())
             evaluate_results["var"]["var_t"].extend(var.view(-1).tolist())
             if config['predict_net'].startswith("Film"):
@@ -346,19 +345,20 @@ def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=N
             total_var_loss += var_loss_item
             evaluate_results["error"]["mae"] += F.l1_loss(F.relu(pred), card).sum().item()
             evaluate_results["error"]["mse"] += F.mse_loss(F.relu(pred), card).sum().item()
-
-            if logger and batch_id == epoch_step - 1 and config['test_only'] is False:
-                logger.info(
-                    "epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\tbatch: {:d}/{:d}\treg loss: {:.4f}\tbp loss: {:.4f}\tground: {:.4f}\tpredict: {:.4f}".format(
-                        int(epoch), int(config["epochs"]), (data_type), int(batch_id), int(epoch_step),
-                        float(reg_loss_item), float(bp_loss_item),
-                        float(var), float(pred_var[0].item())))
             et = time.time()
             total_time += et - st
             total_cnt += 1
         mean_bp_loss = total_bp_loss / total_cnt
         mean_reg_loss = total_reg_loss / total_cnt
         mean_var_loss = total_var_loss / total_cnt
+        if logger and batch_id == epoch_step - 1 and config['test_only'] is False:
+            logger.info(
+                "epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\tbatch: {:d}/{:d}\treg loss: {:.4f}\tbp loss: {:.4f}\tground: {:.4f}\tpredict: {:.4f}".format(
+                    int(epoch), int(config["epochs"]), (data_type), int(batch_id / config['batch_size']),
+                    int(epoch_step / config['batch_size']),
+                    float(reg_loss_item), float(bp_loss_item),
+                    float(var), float(pred_var[0].item())))
+
         if logger and config['test_only'] is False:
             logger.info("epoch: {:0>3d}/{:0>3d}\tdata_type: {:<5s}\treg loss: {:.4f}\tbp loss: {:.4f}".format(
                 epoch, config["epochs"], data_type, mean_reg_loss, mean_bp_loss))
@@ -438,24 +438,22 @@ def test(save_model_dir, test_loaders, config, graph, logger, writer):
         os.path.join(save_model_dir,
                      'best_epoch_{:s}_{:s}_edge.pt'.format(config['predict_net'], config['graph_net']))))
     # print(model)
-    for loader_idx, data_loader in enumerate(test_loaders):
-        mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, _time = evaluate(model=model, data_type="test",
-                                                                                       data_loader=data_loader,
-                                                                                       config=config,
-                                                                                       graph=graph,
-                                                                                       logger=logger, writer=writer)
-        total_test_time += _time
-        # if mean_reg_loss <= best_reg_losses['test']:
-        #     best_reg_losses['test'] = mean_reg_loss
-        # best_reg_epochs['test'] =
-        logger.info(
-            "data_type: {:<5s}\tbest mean loss: {:.3f}".format("test", mean_reg_loss))
-        with open(os.path.join(save_model_dir,
-                               '%s_%s_%s_%d_edge.json' % (
-                                       train_config['predict_net'], train_config['graph_net'], "best_test",
-                                       loader_idx)),
-                  "w") as f:
-            json.dump(evaluate_results, f)
+    mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, _time = evaluate(model=model, data_type="test",
+                                                                                   data_loader=test_loaders,
+                                                                                   config=config,
+                                                                                   graph=graph,
+                                                                                   logger=logger, writer=writer)
+    total_test_time += _time
+    # if mean_reg_loss <= best_reg_losses['test']:
+    #     best_reg_losses['test'] = mean_reg_loss
+    # best_reg_epochs['test'] =
+    logger.info(
+        "data_type: {:<5s}\tbest mean loss: {:.3f}".format("test", mean_reg_loss))
+    with open(os.path.join(save_model_dir,
+                           '%s_%s_%s_edge.json' % (
+                                   train_config['predict_net'], train_config['graph_net'], "best_test",
+                           )), "w") as f:
+        json.dump(evaluate_results, f)
 
     return evaluate_results, total_test_time
 
@@ -517,10 +515,7 @@ if __name__ == "__main__":
     QS = Queryset(dataset_name=train_config['dataset_name'], data_dir=train_config["data_dir"],
                   dataset=train_config["dataset"], all_queries=all_subsets)
 
-    num_node_feat = QS.num_node_feat
-    num_edge_feat = QS.num_edge_feat
-
-    train_sets, val_sets, test_sets, all_train_sets = QS.train_sets, QS.val_sets, QS.test_sets, QS.all_train_sets
+    train_sets, val_sets, test_sets = QS.train_sets, QS.val_sets, QS.test_sets
     # train_datasets = _to_datasets(train_sets)
     # val_datasets, test_datasets, = _to_datasets(val_sets), _to_datasets(test_sets)
     train_loaders, val_loaders, test_loaders = QS.train_loaders, QS.val_loaders, QS.test_loaders
@@ -564,45 +559,34 @@ if __name__ == "__main__":
     if train_config['test_only']:
         evaluate_results, total_test_time = test(save_model_dir, test_loaders, train_config, graph, logger, writer)
         exit(0)
+    tolerance_cnt = 0
     for epoch in range(train_config["epochs"]):
         # if train_config['cv'] == True:
         #     cross_validate(model=model, query_set=QS, device=device, config=train_config, graph=graph, logger=logger,
         #                    writer=writer)
         # else:
-        for loader_idx, dataloader in enumerate(train_loaders):
-            mean_reg_loss, mean_bp_loss, _time = train(model, optimizer=optimizer, scheduler=scheduler,
-                                                       data_type="train", data_loader=dataloader,
-                                                       device=device, config=train_config,
-                                                       epoch=epoch, graph=graph,
-                                                       logger=logger, writer=writer
-                                                       , bottleneck=False)
-            total_train_time += _time
+        mean_reg_loss, mean_bp_loss, _time = train(model, optimizer=optimizer, scheduler=scheduler,
+                                                   data_type="train", data_loader=train_loaders,
+                                                   device=device, config=train_config,
+                                                   epoch=epoch, graph=graph,
+                                                   logger=logger, writer=writer
+                                                   , bottleneck=False)
+        total_train_time += _time
         if scheduler and (epoch + 1) % train_config['decay_patience'] == 0:
             scheduler.step()
             # torch.save(model.state_dict(), os.path.join(save_model_dir, 'epoch%d.pt' % (epoch)))
-        val_mean_reg = 0
-        val_mean_bp = 0
-        val_mean_var = 0
-        val_total_time = 0
-        total_eval_res ={}
-        for loader_idx, dataloader in enumerate(val_loaders):
-            mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, total_time = evaluate(model=model,
-                                                                                                data_type="val",
-                                                                                                data_loader=dataloader,
-                                                                                                config=train_config,
-                                                                                                graph=graph,
-                                                                                                logger=logger,
-                                                                                                writer=writer)
-            val_mean_reg += mean_reg_loss
-            val_mean_var += mean_var_loss
-            val_mean_bp += mean_bp_loss
-            val_total_time += total_time
-            total_eval_res[loader_idx] = evaluate_results
+        mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, total_time = evaluate(model=model,
+                                                                                            data_type="val",
+                                                                                            data_loader=val_loaders,
+                                                                                            config=train_config,
+                                                                                            graph=graph,
+                                                                                            logger=logger,
+                                                                                            writer=writer)
         if writer:
-            writer.add_scalar("%s/REG-%s-epoch" % ("val", train_config["reg_loss"]), val_mean_reg/2, epoch)
-            writer.add_scalar("%s/BP-%s-epoch" % ("val", train_config["bp_loss"]), val_mean_bp/2, epoch)
-            writer.add_scalar("%s/Var-%s-epoch" % ("val", train_config['bp_loss']), val_mean_var/2, epoch)
-            total_dev_time += val_total_time
+            writer.add_scalar("%s/REG-%s-epoch" % ("val", train_config["reg_loss"]), mean_reg_loss, epoch)
+            writer.add_scalar("%s/BP-%s-epoch" % ("val", train_config["bp_loss"]), mean_bp_loss, epoch)
+            writer.add_scalar("%s/Var-%s-epoch" % ("val", train_config['bp_loss']), mean_var_loss, epoch)
+            total_dev_time += total_time
             # cur_reg_loss[loader_idx] = mean_reg_loss
             # flag = True
             # for key1, key2 in zip(cur_reg_loss.keys(), best_reg_losses.keys()):
@@ -612,24 +596,28 @@ if __name__ == "__main__":
             #     for key1, key2 in zip(cur_reg_loss.keys(), best_reg_losses.keys()):
             #         best_reg_losses[key2] = cur_reg_loss[key1]
             #     best_reg_epochs['val'] = epoch
-        if val_mean_reg <= best_reg_losses:
-            best_reg_losses = val_mean_reg
+        if mean_reg_loss <= best_reg_losses:
+            tolerance_cnt = 0
+            best_reg_losses = mean_reg_loss
             best_reg_epochs['val'] = epoch
             logger.info(
                 "data_type: {:<5s}\t\tbest mean loss: {:.3f} (epoch: {:0>3d})".format("val",
-                                                                                      val_mean_reg,
+                                                                                      mean_reg_loss,
                                                                                       epoch))
             torch.save(model.state_dict(),
                        os.path.join(save_model_dir,
                                     'best_epoch_{:s}_{:s}_edge.pt'.format(train_config['predict_net'],
                                                                           train_config['graph_net'])))
             with open(os.path.join(save_model_dir, '%s_%d.json' % ("val", epoch)), "w") as f:
-                json.dump(total_eval_res, f)
+                json.dump(evaluate_results, f)
                 # for data_type in data_loaders.keys():
                 #     logger.info(
                 #         "data_type: {:<5s}\tbest mean loss: {:.3f} (epoch: {:0>3d})".format(data_type,
                 #                                                                             best_reg_losses[data_type],
                 #                                                                             best_reg_epochs[data_type]))
+        tolerance_cnt += 1
+        if tolerance_cnt >= 20:
+            break
     print("data finish")
     evaluate_results, total_test_time = test(save_model_dir, test_loaders, train_config, graph, logger, writer)
     logger.info("train time: {:.3f}, train time per epoch :{:.3f}, test time: {:.3f}, all time: {:.3f}"
