@@ -17,17 +17,17 @@ import torch.nn.functional as F
 # from dataloader import DataLoader
 
 
-def load_graph(filepath, emb_path=None) -> nx.Graph:
+def load_graph(filepath, emb=None) -> nx.Graph:
     nx_graph = nx.Graph()
     edges = []
     graph_data = pd.read_csv(filepath, header=None, skiprows=1, delimiter=" ")
     for i in range(len(graph_data)):
         edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'edge_attr': graph_data.iloc[i, 2]}))
     nx_graph.add_edges_from(edges)
-    if emb_path is not None:
-        node_fea = np.loadtxt(emb_path, delimiter=" ")[:, 1:]
+    if emb is not None:
+        node_fea = np.loadtxt(emb, delimiter=" ")[:, 1:]
     else:
-        node_fea = np.zeros(nx_graph.number_of_nodes(), 128)
+        node_fea = np.zeros((nx_graph.number_of_nodes(), 128))
     for i in range(nx_graph.number_of_nodes()):
         nx_graph.add_node(i, x=node_fea[i])
 
@@ -179,11 +179,15 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True
         for cnt in range(graph.number_of_edges()):
             subgraph = candidate_sets[cnt]
             pyg_subgraph = torch_geometric.utils.from_networkx(subgraph)
+            if pyg_subgraph.num_nodes == 0:
+                continue
             pyg_subgraphs.append(pyg_subgraph)
     else:
         for node in range(graph.number_of_nodes()):
             subgraph = candidate_sets[node]
             pyg_subgraph = torch_geometric.utils.from_networkx(subgraph)
+            if pyg_subgraph.num_nodes == 0:
+                continue
             pyg_subgraphs.append(pyg_subgraph)
     pyg_batch = Batch.from_data_list(pyg_subgraphs)
     pyg_batch.x = pyg_batch.x.to(torch.float32)
@@ -197,7 +201,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True
     pyg_batch.original_edge_attr = pyg_graph.edge_attr
     pyg_batch.node_to_subgraph = pyg_batch.batch
     del pyg_batch.batch
-    pyg_batch.subgraph_to_graph = torch.zeros(len(pyg_subgraphs), dtype=torch.long)
+    pyg_batch.subgraph_to_graph = torch.zeros(pyg_batch.num_subgraphs, dtype=torch.long)
     for k, v in pyg_graph:
         if k not in ['x', 'edge_index', 'edge_attr', 'pos', 'num_nodes', 'batch',
                      'z', 'rd', 'node_type']:

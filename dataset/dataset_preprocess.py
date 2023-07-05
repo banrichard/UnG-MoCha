@@ -121,11 +121,13 @@ def graph_generate(file_dir, node_num: int, m) -> nx.Graph:
 def to_LSS_format(graph, file):
     for i in range(len(list(graph.nodes))):
         graph.nodes[i]['label'] = -1
-    with open("dataset/intel/" + file, 'w') as f:
+    with open("california/" + file, 'w') as f:
         f.write("t # 0\n")
         for node in graph.nodes(data=True):
             f.write("v {} {}\n".format(node[0], node[1]['label']))
         for edge in graph.edges(data=True):
+            if edge[2]['prob'] < 0.01:
+                continue
             f.write("e {} {} {:.2f}\n".format(edge[0], edge[1], edge[2]['prob']))
         print("data graph is generated!")
     return graph
@@ -134,12 +136,29 @@ def to_LSS_format(graph, file):
 class QuerySampler(object):
     def __init__(self, graph):
         self.graph = graph
+        self.samples = []
+
+    def sample(self, type):
+        if type == "star_3":
+            return self.sample_star(3)
+        elif type == "triangle_3":
+            return self.sample_triangle(3)
+        elif type == "star_4":
+            return self.sample_star(4)
+        elif type == "path_4":
+            return self.sample_path(4)
+        elif type == "tailedtriangle_4":
+            return self.find_tailed_triangles(self.samples)
+        elif type == "cycle_4":
+            return self.sample_cycle(4)
+        elif type == "clique_4":
+            return self.sample_clique(4)
 
     def sample_star(self, node_num):
         nodes_list = []
         edges_list = []
         while True:
-            src = random.randint(0, self.graph.number_of_nodes())
+            src = random.randint(0, self.graph.number_of_nodes() - 1)
             if self.graph.degree[src] >= node_num - 1:
                 break
         nodes_list.append(src)
@@ -182,7 +201,7 @@ class QuerySampler(object):
         nodes_list = []
         edges_list = []
         while True:
-            src = random.randint(0, self.graph.number_of_nodes())
+            src = random.randint(0, self.graph.number_of_nodes() - 1)
             neighbors = list(graph.neighbors(src))
             if len(neighbors) >= 2:
                 for v in neighbors:
@@ -199,7 +218,7 @@ class QuerySampler(object):
                         edges_list.append((src, v))
                         edges_list.append((v, w))
                         edges_list.append((src, w))
-                        if node_num > 3:
+                        if node_num > 3:  # tailedtriangle
                             tail_node = nodes_list[random.randint(0, len(nodes_list) - 1)]
                             neighbor_candidates = set(graph.neighbors(tail_node)).difference(set(nodes_list))
                             candidate = list(neighbor_candidates)[random.randint(0, len(neighbor_candidates) - 1)]
@@ -207,6 +226,28 @@ class QuerySampler(object):
                             edges_list.append((tail_node, candidate))
                         sample = self.node_reorder(nodes_list, edges_list)
                         return sample
+
+    def find_tailed_triangles(self, samples):
+        # Iterate over all triangles in the graph
+        cliques = list(nx.find_cliques(self.graph))
+        candidates = [clique for clique in cliques if len(clique) == 3]
+        for triangle in candidates:
+            # Check if any node in the triangle has a neighbor outside the triangle
+            for node in triangle:
+                neighbors = set(self.graph.neighbors(node))
+                if len(neighbors - set(triangle)) > 0:
+                    subgraph = nx.subgraph(self.graph, triangle).copy()
+                    subgraph.add_edge(node, list(neighbors)[random.randint(0, len(neighbors) - 1)])
+                    node_list = list(subgraph.nodes())
+                    edge_list = list(subgraph.edges())
+                    if len(edge_list) != 4:
+                        break
+                    sample = self.node_reorder(node_list, edge_list)
+                    if sample not in samples:
+                        samples.append(sample)
+                        return sample
+                    else:
+                        continue
 
     def sample_cycle(self, node_num):
         circles = nx.cycle_basis(self.graph)
@@ -233,7 +274,7 @@ class QuerySampler(object):
         edges_list = []
         parent = {}
         q = queue.Queue()
-        src = random.randint(0, self.graph.number_of_nodes())
+        src = random.randint(0, self.graph.number_of_nodes() - 1)
         q.put(src)
         while not q.empty():
             if len(nodes_list) == node_num:
@@ -255,7 +296,7 @@ class QuerySampler(object):
     def sample_clique(self, node_num):
         cliques = list(nx.find_cliques(self.graph))
         candidates = [clique for clique in cliques if len(clique) == node_num]
-        nodes_list = candidates[random.randint(0, len(candidates) - 1)]
+        nodes_list = candidates[random.randint(0, len(candidates))]
         edge_list = nx.subgraph(self.graph, nodes_list).edges()
         sample = self.node_reorder(nodes_list, edge_list)
         # nodes_list = []
@@ -294,24 +335,33 @@ class QuerySampler(object):
 #     graph = pickle.load(f)
 #     # edge_list = nx.to_pandas_edgelist(graph)
 #     # edge_list.to_csv("dataset/simulation/s14linc.txt", sep=" ", header=None, index=False,float_format="%.2f")
-graph = load_data("dataset/intel/intel.txt")
-graph = to_LSS_format(graph, "intel_lss.txt")
+graph = load_data("california/california.txt")
+graph = to_LSS_format(graph, "california_lss.txt")
 sampler = QuerySampler(graph)
-label_dict = {'star_3': [189.2791, 902.7179],
-              'triangle_3': [1483.7243, 18453.2766],
-              'path_4': [49.2315, 393.9129],
-              'star_4': [504.5776, 15707.4893],
-              'tailedtriangle_4': [2961.2061, 317758.7999],
-              'cycle_4': [3613.9587, 561663.3236],
-              'clique_4': [367.7054, 5148.8938]}
-for i in range(100):
-    sample = sampler.sample_star(3)
-    with open("dataset/intel/queryset/star_3/{}.txt".format(i), 'w') as f:
-        f.write("t # {}\n".format(i))
-        for node in sample.nodes(data=True):
-            f.write("v {} {} {}\n".format(node[0], node[1]["label"], node[1]['dvid']))
-        for edge in sample.edges(data=True):
-            f.write("e {} {} {:.2f}\n".format(edge[0], edge[1], edge[2]['prob']))
-    with open("dataset/intel/label/star_3/{}.txt".format(i), 'w') as f:
-        f.write(str(label_dict['star_3'][0]) + " " + str(label_dict['star_3'][1]))
+label_dict = {
+    'star_3': [15219.7297, 11357.0412],
+    'triangle_3': [1454950.4674, 2516502.6185],
+    # 'path_4': [2.0891,0.6203],
+    'star_4': [410.9022, 395.8754],
+    'tailedtriangle_4': [34456.9569, 78751.9875],
+    'cycle_4': [334447.4313, 567995.9319],
+    'clique_4': [16039.8094, 14225.2783]
+}
+for key in label_dict.keys():
+    for i in range(100):
+        sample = sampler.sample(key)
+        query_dir = os.path.join("BJ", "queryset", key)
+        if not os.path.exists(query_dir):
+            os.mkdir(query_dir)
+        with open(os.path.join(query_dir, "{}.txt".format(i)), 'w') as f1:
+            f1.write("t # {}\n".format(i))
+            for node in sample.nodes(data=True):
+                f1.write("v {} {} {}\n".format(node[0], node[1]["label"], node[1]['dvid']))
+            for edge in sample.edges(data=True):
+                f1.write("e {} {} {:.2f}\n".format(edge[0], edge[1], edge[2]['prob']))
+        label_dir = os.path.join("BJ", "label", key)
+        if not os.path.exists(label_dir):
+            os.mkdir(label_dir)
+        with open(os.path.join(label_dir, "{}.txt".format(i)), 'w') as f2:
+            f2.write(str(label_dict[key][0]) + " " + str(label_dict[key][1]))
 # prepare_data_pack(g, ["602020"], "s1", "dataset/simulation")

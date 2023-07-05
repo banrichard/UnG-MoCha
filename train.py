@@ -69,7 +69,7 @@ train_config = {
     "emb_dim": 128,
     "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
 
-    "predict_net": "MeanPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
+    "predict_net": "FilmSumPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
     # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,
     # MeanMemAttnPredictNet, SumMemAttnPredictNet, MaxMemAttnPredictNet,
     # DIAMNet
@@ -117,9 +117,9 @@ train_config = {
 }
 
 
-def data_graph_transform(data_dir, dataset, dataset_name, h=1):
+def data_graph_transform(data_dir, dataset, dataset_name, emb=None):
     graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
-                       emb_path="dataset/krogan/embedding/krogan_core.csv")
+                       emb=emb)
     candidate_sets = {}
     # for node in range(graph.number_of_nodes()):
     #     subgraph = k_hop_induced_subgraph(graph, node)
@@ -129,7 +129,7 @@ def data_graph_transform(data_dir, dataset, dataset_name, h=1):
         subgraph = k_hop_induced_subgraph_edge(graph, edge)
         candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
         cnt += 1
-    batch = create_batch(graph, candidate_sets, emb="dataset/krogan/embedding/krogan_core.csv", edge_base=True)
+    batch = create_batch(graph, candidate_sets, emb=emb, edge_base=True)
     return batch
 
 
@@ -450,8 +450,9 @@ def test(save_model_dir, test_loaders, config, graph, logger, writer):
     logger.info(
         "data_type: {:<5s}\tbest mean loss: {:.3f}".format("test", mean_reg_loss))
     with open(os.path.join(save_model_dir,
-                           '%s_%s_%s_edge.json' % (
+                           '%s_%s_%s_%s_edge.json' % (
                                    train_config['predict_net'], train_config['graph_net'], "best_test",
+                                   train_config['dataset']
                            )), "w") as f:
         json.dump(evaluate_results, f)
 
@@ -535,6 +536,7 @@ if __name__ == "__main__":
     #     model = ESUMS(train_config)
     else:
         raise NotImplementedError("Currently, the %s model is not supported" % (train_config["model"]))
+    # model = torch.compile(model)
     model = model.to(device)
     logger.info(model)
     logger.info("num of parameters: %d" % (sum(p.numel() for p in model.parameters() if p.requires_grad)))

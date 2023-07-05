@@ -136,10 +136,10 @@ class Queryset(object):
         self.graph = load_graph(
             os.path.join(self.data_dir, self.dataset,
                          self.dataset_name))  # "../dataset/krogan/krogan_core.txt"
-        self.node_label_card, self.edge_label_card = self.get_label_card(self.graph)
+        # self.node_label_card, self.edge_label_card = self.get_label_card(self.graph)
         self.node_label_fre = 0
         self.edge_label_fre = 0
-        self.label_dict = {key: key for key in self.node_label_card.keys()}
+        # self.label_dict = {key: key for key in self.node_label_card.keys()}
         # embed_feat_path = os.path.join(args.embed_feat_dir, "{}.csv".format(args.dataset_name))
         # embed_feat = np.loadtxt(embed_feat_path, delimiter=" ")[:, 1:]
         #
@@ -151,7 +151,7 @@ class Queryset(object):
 
         self.edge_embed_feat = None
         self.edge_embed_dim = 0
-        self.num_edge_feat = len(self.edge_label_card)
+        # self.num_edge_feat = len(self.edge_label_card)
         self.all_subsets = self.transform_motif_to_tensors(all_queries)
         self.batch_size = batch_size
 
