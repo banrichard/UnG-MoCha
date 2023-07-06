@@ -77,10 +77,7 @@ class BasePoolPredictNet(nn.Module):
         for layer in [self.p_layer, self.g_layer, self.pred_layer1]:
             nn.init.normal_(layer.weight, 0.0, 1 / (self.hidden_dim ** 0.5))
             nn.init.zeros_(layer.bias)
-        for layer in [self.pred_mean]:
-            nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
-            nn.init.zeros_(layer.bias)
-        for layer in [self.pred_var]:
+        for layer in [self.pred_mean, self.pred_var]:
             nn.init.kaiming_uniform_(layer.weight, nonlinearity='relu')
             nn.init.zeros_(layer.bias)
 
@@ -108,6 +105,7 @@ class FilmSumPredictNet(BasePoolPredictNet):
         self.linear_alpha2 = torch.nn.Linear(hidden_dim, hidden_dim)
         self.linear_beta1 = torch.nn.Linear(hidden_dim, hidden_dim)
         self.linear_beta2 = torch.nn.Linear(hidden_dim, hidden_dim)
+        self.epsilon = 1e-8
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -135,10 +133,13 @@ class FilmSumPredictNet(BasePoolPredictNet):
         y = self.act(y)  # relu
         y_var = y
         y = self.pred_mean(y)
+        y = F.relu(y)
         var = self.pred_var(y_var)
+        var = F.relu(var)
+        distribution = torch.distributions.Normal(loc=y + self.epsilon, scale=torch.sqrt(var) + self.epsilon)
         # return y
         filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
-        return y, var, filmreg
+        return distribution, filmreg
 
 
 class DIAMNet(nn.Module):

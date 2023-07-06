@@ -7,6 +7,7 @@ from multiprocessing import Pool
 import pandas as pd
 import torch
 import torch.nn.functional as F
+import scipy.stats as stats
 
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
@@ -606,6 +607,7 @@ def batch_convert_len_to_mask(batch_lens, max_seq_len=-1):
         mask[i, l:].fill_(0)
     return mask
 
+
 def gather_indices_by_lens(lens):
     result = list()
     i, j = 0, 1
@@ -619,3 +621,11 @@ def gather_indices_by_lens(lens):
     if i != j:
         result.append(indices[i:j])
     return result
+
+
+def val_to_distribution(mean, var) -> torch.Tensor:
+    sigma = torch.sqrt(var)
+    norm = stats.norm(loc=mean, scale=sigma)
+    x = np.linspace(mean - 3 * sigma, mean + 3 * sigma, 128)
+    y = torch.Tensor(norm.pdf(x).astype(float).tolist())
+    return y
