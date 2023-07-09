@@ -19,6 +19,11 @@ def topk(
         min_score: Optional[float] = None,
         tol: float = 1e-7,
 ) -> Tensor:
+    """
+    This pooling method concentrates on select the most important edges in the subgraph, and edge probability is the
+    only feature. Therefore, we focus on min_score method and first implement min-score based pooling. Ratio-based is
+    pending now.
+    """
     if min_score is not None:
         # Make sure that we do not drop all edges in a graph.
         scores_max = scatter_max(score, batch)[0].index_select(0, batch) - tol
@@ -70,10 +75,9 @@ def topk(
 
 def filter_adj(
         edge_index: Tensor,
-        edge_attr: Optional[Tensor],
         perm: Tensor,
         num_nodes: Optional[int] = None,
-) -> Tuple[Tensor, Optional[Tensor]]:
+) -> Tensor:
     num_nodes = maybe_num_nodes(edge_index, num_nodes)
 
     mask = perm.new_full((num_nodes,), -1)
@@ -85,14 +89,11 @@ def filter_adj(
     mask = (row >= 0) & (col >= 0)
     row, col = row[mask], col[mask]
 
-    if edge_attr is not None:
-        edge_attr = edge_attr[mask]
-
-    return torch.stack([row, col], dim=0), edge_attr
+    return torch.stack([row, col], dim=0)
 
 
-class EdgeTopKPooling(torch.nn.Module):
-    r"""This is copied from torch_geometric official version,we modified it into edge-centric but not node-centric.
+class TopKEdgePooling(torch.nn.Module):
+    r"""This is copied from torch_geometric official version.We modified it into edge-centric but not node-centric.
     Original version can be found at torch_geometric website.
     """
 
@@ -101,7 +102,6 @@ class EdgeTopKPooling(torch.nn.Module):
             in_channels: int,
             ratio: Union[int, float] = 0.5,
             min_score: Optional[float] = None,
-            multiplier: float = 1.,
             nonlinearity: Callable = torch.tanh,
     ):
         super().__init__()
@@ -109,7 +109,6 @@ class EdgeTopKPooling(torch.nn.Module):
         self.in_channels = in_channels
         self.ratio = ratio
         self.min_score = min_score
-        self.multiplier = multiplier
         self.nonlinearity = nonlinearity
 
         self.weight = Parameter(torch.Tensor(1, in_channels))
@@ -124,31 +123,32 @@ class EdgeTopKPooling(torch.nn.Module):
             self,
             x: Tensor,
             edge_index: Tensor,
-            edge_attr: Optional[Tensor] = None,
+            edge_attr: Tensor,
             batch: Optional[Tensor] = None
-    ) -> Tuple[Tensor, Tensor, Optional[Tensor], Tensor, Tensor, Tensor]:
-        """"""
-
+    ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Tensor, Tensor]:
         if batch is None:
             batch = edge_index.new_zeros(x.size(0))
         # self attention
         attn = edge_attr
         attn = attn.unsqueeze(-1) if attn.dim() == 1 else attn
-        # y = XP/||P|| -> E_A*P/||P||
+        # y = XP -> E_A*P
         score = (attn * self.weight).sum(dim=-1)
         # y = sigmoid(y(idx))
         if self.min_score is None:
-            # actually here is tanh
+            # Y = act(Y/||Y||^2) actually here is tanh
+            # TODO: verify other activation function' effect
             score = self.nonlinearity(score / self.weight.norm(p=2, dim=-1))
         else:
+            # calculate each subgraph's score
             score = softmax(score, batch)
-
+        # get the idx of selected edge attr
         perm = topk(score, x, self.ratio, batch, self.min_score)
-        x = x[perm] * score[perm].view(-1, 1)
-
+        # select the edges
+        edge_attr = edge_attr[perm, :] * score[perm].view(-1, 1)
+        x = x[perm]
         batch = batch[perm]
-        edge_index, edge_attr = filter_adj(edge_index, edge_attr, perm,
-                                           num_nodes=score.size(0))
+        edge_index = filter_adj(edge_index, perm,
+                                num_nodes=x.size(0))
 
         return x, edge_index, edge_attr, batch, perm, score[perm]
 

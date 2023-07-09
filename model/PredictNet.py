@@ -71,6 +71,7 @@ class BasePoolPredictNet(nn.Module):
         self.bn = nn.BatchNorm1d(hidden_dim)
         self.pred_layer1 = nn.Linear(self.hidden_dim * 4, self.hidden_dim)
         # self.pred_layer2 = nn.Linear(self.hidden_dim, 1)
+        self.ln = nn.LayerNorm(hidden_dim)
         self.pred_mean = nn.Linear(self.hidden_dim, 1)
         self.pred_var = nn.Linear(self.hidden_dim, 1)
         # init
@@ -131,6 +132,7 @@ class FilmSumPredictNet(BasePoolPredictNet):
         y = self.pred_layer1(
             torch.cat([p, g, g - p, g * p], dim=1))  # W ^T * FCL(x ‖ y ‖ x − y ‖ x \dot y) + b.
         y = self.act(y)  # relu
+        y = self.ln(y)
         y_var = y
         y = self.pred_mean(y)
         y = F.relu(y)
