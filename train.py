@@ -114,7 +114,9 @@ train_config = {
     "save_model_dir": "saved_model",
     'init_g_dim': 1,
 
-    "test_only": False
+    "test_only": False,
+    "GSL": True
+
 }
 
 
@@ -128,7 +130,10 @@ def data_graph_transform(data_dir, dataset, dataset_name, emb=None):
     cnt = 0
     for edge in graph.edges(data=True):
         subgraph = k_hop_induced_subgraph_edge(graph, edge)
-        candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
+        if train_config['GSL']:
+            candidate_sets[cnt] = subgraph
+        else:
+            candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
         cnt += 1
     batch = create_batch(graph, candidate_sets, emb=emb, edge_base=True)
     return batch
@@ -160,10 +165,6 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
     elif config['bp_loss'] == "HUBER":
         bp_crit = lambda pred, target: F.huber_loss(pred, target, delta=0.1)
     # data preparation
-    reg_crit_mean = lambda pred, target: F.l1_loss(F.leaky_relu(pred), target)
-    reg_crit_var = lambda pred, target: F.mse_loss(F.leaky_relu(pred), target)
-    bp_crit_mean = lambda pred, target: F.l1_loss(F.leaky_relu(pred), target)
-    bp_crit_var = lambda pred, target: F.mse_loss(F.leaky_relu(pred), target)
     # config['init_pe_dim'] = graph.edge_attr.size(1)
     if bottleneck:
         model.load_state_dict(
@@ -205,7 +206,7 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
                                                         torch.distributions.Normal(card, torch.sqrt(var))) + \
                       train_config["weight_decay_film"] * filmreg
         else:
-            distribution, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
+            distribution = model(motif_x, motif_edge_index, motif_edge_attr, graph)
             # pred, pred_var = model(motif_x, motif_edge_index, motif_edge_attr, graph)
             # y_pred = val_to_distribution(pred.detach().cpu(), pred_var.detach().cpu()).cuda(0)
             # y_pred = torch.tensor(y_pred.view(-1, 1), requires_grad=True)

@@ -34,7 +34,7 @@ def load_graph(filepath, emb=None) -> nx.Graph:
     return nx_graph
 
 
-def k_hop_induced_subgraph_edge(graph, edge, k=1):
+def k_hop_induced_subgraph_edge(graph, edge, k=1) -> nx.Graph:
     node_list = []
     edge_list = []
     node_u = edge[0]
@@ -121,7 +121,7 @@ def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=20, subs=5):
     return subgraph_with_highest_probability
 
 
-def random_walk_on_subgraph_edge(subgraph: nx.Graph, edge, walks=20, subs=5):
+def random_walk_on_subgraph_edge(subgraph: nx.Graph, edge, walks=20, subs=5) -> nx.Graph:
     random.seed(1)
     candidate_set = []
     for s in range(subs):
