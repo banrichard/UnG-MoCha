@@ -2,6 +2,7 @@ import torch
 import torch_geometric
 from torch_geometric.data import Data
 
+
 # This is a copy from torch_geometric/data/batch.py
 # which is modified to support batch assignment in subgraph level
 
@@ -12,6 +13,7 @@ class Batch(Data):
     In addition, single graphs can be reconstructed via the assignment vector
     :obj:`batch`, which maps each node to its respective graph identifier.
     """
+
     def __init__(self, batch=None, **kwargs):
         super(Batch, self).__init__(**kwargs)
 
@@ -27,7 +29,7 @@ class Batch(Data):
         Additionally, creates assignment batch vectors for each key in
         :obj:`follow_batch`."""
 
-        keys = [set(data.keys) for data in data_list] # get x, edge_idx, edge_attr
+        keys = [set(data.keys) for data in data_list]  # get x, edge_idx, edge_attr
         keys = list(set.union(*keys))
         assert 'batch' not in keys
 
@@ -47,12 +49,12 @@ class Batch(Data):
         # data_list = [subgraph for _, subgraph in sorted(zip(sizes, data_list), reverse=True)]
         # sizes.sort(reverse=True)
         for i, data in enumerate(data_list):
-            for key in data.keys: # x,edge_idx,edge_attr
+            for key in data.keys:  # x,edge_idx,edge_attr
                 item = data[key]
                 if torch.is_tensor(item) and item.dtype != torch.bool:
                     item = item + cumsum[key]
                 if torch.is_tensor(item):
-                    size = item.size(data.__cat_dim__(key, data[key])) # item.size(0) = 17
+                    size = item.size(data.__cat_dim__(key, data[key]))  # item.size(0) = 17
                 else:
                     size = 1
                 batch.__slices__[key].append(size + batch.__slices__[key][-1])
@@ -67,12 +69,12 @@ class Batch(Data):
                 batch[key].append(item)
 
                 if key in follow_batch:
-                    item = torch.full((size, ), i, dtype=torch.long)
+                    item = torch.full((size,), i, dtype=torch.long)
                     batch['{}_batch'.format(key)].append(item)
 
             num_nodes = data.num_nodes
             if num_nodes is not None:
-                item = torch.full((num_nodes, ), i, dtype=torch.long)
+                item = torch.full((num_nodes,), i, dtype=torch.long)
                 batch.batch.append(item)
 
         if num_nodes is None:
@@ -85,14 +87,6 @@ class Batch(Data):
                                        dim=data_list[0].__cat_dim__(key, item))
             elif isinstance(item, int) or isinstance(item, float):
                 batch[key] = torch.tensor(batch[key])
-
-        # Copy custom data functions to batch (does not work yet):
-        # if data_list.__class__ != Data:
-        #     org_funcs = set(Data.__dict__.keys())
-        #     funcs = set(data_list[0].__class__.__dict__.keys())
-        #     batch.__custom_funcs__ = funcs.difference(org_funcs)
-        #     for func in funcs.difference(org_funcs):
-        #         setattr(batch, func, getattr(data_list[0], func))
 
         if torch_geometric.is_debug_enabled():
             batch.debug()
@@ -112,10 +106,6 @@ class Batch(Data):
 
         keys = [key for key in self.keys if key[-5:] != 'batch']
         cumsum = {key: 0 for key in keys}
-        if 'assignment_index_2' in keys:
-            cumsum['assignment_index_2'] = torch.LongTensor([[0], [0]])
-        if 'assignment_index_3' in keys:
-            cumsum['assignment_index_3'] = torch.LongTensor([[0], [0]])
         data_list = []
         for i in range(len(self.__slices__[keys[0]]) - 1):
             data = self.__data_class__()
@@ -129,33 +119,15 @@ class Batch(Data):
                         data[key] = data[key] - cumsum[key]
                 else:
                     data[key] = self[key][self.__slices__[key][i]:self.
-                                          __slices__[key][i + 1]]
+                    __slices__[key][i + 1]]
                 if key == 'node_to_subgraph':
                     cumsum[key] = cumsum[key] + data.num_subgraphs
                 elif key == 'subgraph_to_graph':
                     cumsum[key] = cumsum[key] + 1
                 elif key == 'original_edge_index':
                     cumsum[key] = cumsum[key] + data.num_subgraphs
-                elif key == 'tree_edge_index':
-                    cumsum[key] = cumsum[key] + data.num_cliques
-                elif key == 'atom2clique_index':
-                    cumsum[key] = cumsum[key] + torch.tensor([[data.num_atoms], [data.num_cliques]])
-                elif key == 'edge_index_2':
-                    cumsum[key] = cumsum[key] + data.iso_type_2.shape[0]
-                elif key == 'edge_index_3':
-                    cumsum[key] = cumsum[key] + data.iso_type_3.shape[0]
-                elif key == 'batch_2':
-                    cumsum[key] = cumsum[key] + 1
-                elif key == 'batch_3':
-                    cumsum[key] = cumsum[key] + 1
-                elif key == 'assignment2_to_subgraph':
+                elif key == 'original_edge_attr':
                     cumsum[key] = cumsum[key] + data.num_subgraphs
-                elif key == 'assignment3_to_subgraph':
-                    cumsum[key] = cumsum[key] + data.num_subgraphs
-                elif key == 'assignment_index_2':
-                    cumsum[key] = cumsum[key] + torch.LongTensor([[data.num_nodes], [data.iso_type_2.shape[0]]])
-                elif key == 'assignment_index_3':
-                    cumsum[key] = cumsum[key] + torch.LongTensor([[data.iso_type_2.shape[0]], [data.iso_type_3.shape[0]]])
                 else:
                     cumsum[key] = cumsum[key] + data.__inc__(key, data[key])
             data_list.append(data)
@@ -167,8 +139,8 @@ class Batch(Data):
         """Returns the number of graphs in the batch."""
         return self.batch[-1].item() + 1
 
-    def padding(self,data_list):
+    def padding(self, data_list):
         max_len = max([data.edge_index.size(1) for data in data_list])
-        for (i,data) in enumerate(data_list):
+        for (i, data) in enumerate(data_list):
             if data.edge_index.size(1) < max_len:
-                data.x.expand(data.num_nodes,max_len)
+                data.x.expand(data.num_nodes, max_len)

@@ -166,12 +166,12 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True
     # x = torch.from_numpy(x)
 
     pyg_graph = torch_geometric.utils.from_networkx(graph)
-    if emb is None:
-        x = torch.zeros(len(graph.nodes), 1, dtype=torch.float32)
-        degree = list(graph.degree)
-        for i in range(len(degree)):
-            x[i] = degree[i][1]
-        pyg_graph.x = x
+
+    x = torch.zeros(len(graph.nodes), 1, dtype=torch.float32)
+    degree = list(graph.degree)
+    for i in range(len(degree)):
+        x[i] = degree[i][1]
+    pyg_graph.x = x
     # get the corresponding subgraph(s) of each node in the graph
     # for now we randomly select a subgraph (2023.5.15 21:30)
     pyg_subgraphs = []

@@ -2,8 +2,8 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from torch_geometric.nn import GINConv, GINEConv, global_mean_pool, global_add_pool, TopKPooling
-
-from model.MLP import FC, MLP
+from model.topK import TopKEdgePooling
+from utils.dataloader import DataLoader
 
 
 class NestedGIN(torch.nn.Module):
@@ -24,7 +24,7 @@ class NestedGIN(torch.nn.Module):
         # self.mlp_in_ch = self.num_expert * self.out_g_ch if self.pool_type == "att" else self.out_g_ch
         self.convs = nn.ModuleList()
         cov_layer = self.build_conv_layers(model_type)
-        self.pooling = TopKPooling(in_channels=self.input_dim)
+        self.pooling = TopKEdgePooling(in_channels=self.input_dim, ratio=0.5, min_score=None)
         for l in range(self.num_layers):
             hidden_input_dim = self.input_dim if l == 0 else self.num_hid
             hidden_output_dim = self.num_hid

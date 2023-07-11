@@ -11,8 +11,11 @@ import torch.nn.functional as F
 import warnings
 
 import scipy.stats as stats
+import torch_geometric.utils
 from torch.utils.tensorboard import SummaryWriter
 from torch_geometric.data import Data
+
+import utils.dataloader
 from graph_converter import Converter
 from model.CountingNet import EdgeMean
 from motif_processor import QueryPreProcessing, Queryset, _to_datasets
@@ -124,6 +127,7 @@ def data_graph_transform(data_dir, dataset, dataset_name, emb=None):
     graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
                        emb=emb)
     candidate_sets = {}
+    subgraphs = []
     # for node in range(graph.number_of_nodes()):
     #     subgraph = k_hop_induced_subgraph(graph, node)
     #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
@@ -184,8 +188,8 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
         # motif_edge_index = motif_edge_index.cuda(0)
         # motif_edge_attr = motif_edge_attr.cuda(0)
         # y = val_to_distribution(card, var)
-        card = card.cuda(0)
-        var = var.cuda(0)
+        card = card.cuda()
+        var = var.cuda()
         # y = y.cuda(0)
         # graph = graph.cuda(0)
         # if config['cuda']:
