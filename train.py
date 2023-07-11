@@ -127,7 +127,6 @@ def data_graph_transform(data_dir, dataset, dataset_name, emb=None):
     graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
                        emb=emb)
     candidate_sets = {}
-    subgraphs = []
     # for node in range(graph.number_of_nodes()):
     #     subgraph = k_hop_induced_subgraph(graph, node)
     #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
@@ -459,7 +458,7 @@ if __name__ == "__main__":
             pass
 
     ts = datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
-    model_name = "%s_%s_%s" % (train_config["model"], train_config["predict_net"], ts)
+    model_name = "%s_%s" % (train_config["predict_net"], ts)
     save_model_dir = train_config["save_model_dir"]
     os.makedirs(save_model_dir, exist_ok=True)
 
@@ -470,7 +469,8 @@ if __name__ == "__main__":
     # set logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    fmt = logging.Formatter('%(asctime)s: [ %(message)s ]', '%Y/%m/%d %H:%M:%S')
+    fmt = logging.Formatter(fmt="[ %(asctime)s ] %(message)s",
+                            datefmt="%a %b %d %H:%M:%S %Y")
     console = logging.StreamHandler()
     console.setFormatter(fmt)
     logger.addHandler(console)
