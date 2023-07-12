@@ -45,178 +45,6 @@ def nodes_to_subgraphs(data):
     return new_data
 
 
-def create_subgraphs(data, h=1, sample_ratio=1.0, max_nodes_per_hop=None,
-                     node_label='hop', use_rd=False, subgraph_pretransform=None):
-    # Given a PyG graph data, extract an h-hop rooted subgraph for each of its
-    # nodes, and combine these node-subgraphs into a new large disconnected graph
-    # If given a list of h, will return multiple subgraphs for each node stored in
-    # a dict.
-
-    if type(h) == int:
-        h = [h]
-    assert (isinstance(data, Data))
-    x, edge_index, num_nodes = data.x, data.edge_index, data.num_nodes
-    if type(data.num_nodes) is torch.Tensor:
-        num_nodes = num_nodes.item()
-    edge_attr = data.edge_attr
-    for h_ in h:
-        subgraphs = []
-        for e in edge_index.T:
-            nodes_0, edge_index_0, edge_mask_0, z_0 = k_hop_subgraph(
-                e[0], h_, edge_index, False, num_nodes, node_label='hop',
-                max_nodes_per_hop=max_nodes_per_hop
-            )
-            nodes_1, edge_index_1, edge_mask_1, z_1 = k_hop_subgraph(
-                e[1], h_, edge_index, False, num_nodes, node_label='hop',
-                max_nodes_per_hop=max_nodes_per_hop
-            )
-            nodes_ = [nodes_0[0], nodes_1[0]]
-            nodes_ = nodes_ + [item for item in nodes_0 if item not in nodes_]
-            nodes_ = nodes_ + [item for item in nodes_1 if item not in nodes_]
-            edge_mask_ = torch.logical_or(edge_mask_0, edge_mask_1)
-            z_ = []
-            for n in nodes_:
-                d0 = z_0[n] if n in z_0 else h_ + 1
-                d1 = z_1[n] if n in z_1 else h_ + 1
-                z_.append([d0, d1])
-            z_ = torch.tensor(z_).to(edge_index.device)
-            nodes_ = torch.tensor(nodes_).to(edge_index.device)
-            edge_index_ = edge_index[:, edge_mask_]
-            # relabel nodes
-            node_idx = edge_index[1].new_full((num_nodes,), -1)
-            node_idx[nodes_] = torch.arange(nodes_.size(0), device=edge_index.device)
-            edge_index_ = node_idx[edge_index_]
-
-            x_ = None
-            edge_attr_ = None
-            pos_ = None
-            if x is not None:
-                x_ = x[nodes_]
-            else:
-                x_ = None
-
-            if 'node_type' in data:
-                node_type_ = data.node_type[nodes_]
-
-            if data.edge_attr is not None:
-                edge_attr_ = edge_attr[edge_mask_]
-            if data.pos is not None:
-                pos_ = data.pos[nodes_]
-            data_ = data.__class__(x_, edge_index_, edge_attr_, None, pos_, z=z_)
-            data_.num_nodes = nodes_.shape[0]
-            data_.sub_degree = degree(edge_index_[0], num_nodes=nodes_.shape[0])
-            data_.original_idx = nodes_
-
-            if 'node_type' in data:
-                data_.node_type = node_type_
-
-            subgraphs.append(data_)
-
-        pos_encs = []
-        pos_indices = []
-        pos_batches = []
-        cnt_batch = 0
-        for sg in subgraphs:
-            # encodes the distance and degree information of nodes within the subgraph
-            lsg = sg.num_nodes
-            pos_enc = torch.cat((F.one_hot(sg.sub_degree.long(), num_classes=200).view(lsg, -1),
-                                 F.one_hot(sg.z.long(), num_classes=100).view(lsg, -1)), dim=-1)
-            pos_enc = pos_enc.sum(dim=0)
-
-            # encodes the edge information within the subgraph
-            # wrong version, cannot count number of edges of certain type
-            # pos_enc = torch.cat((pos_enc, F.one_hot(sg.z[sg.edge_index].transpose(0, 1).reshape(-1, 4), num_classes=100).view(-1,400).sum(dim=0)))
-            pos_enc = torch.cat((pos_enc,
-                                 F.one_hot((sg.z[remove_self_loops(sg.edge_index)[0]].transpose(0, 1).reshape(-1,
-                                                                                                              4)) @ torch.tensor(
-                                     [216, 36, 6, 1]), num_classes=1300).sum(dim=0)))
-            # pos_encs.append(pos_enc.unsqueeze(0))#.to_sparse())
-            pos_index = torch.nonzero(pos_enc)
-            pos_encs.append(pos_enc[pos_index].view(-1))
-            pos_indices.append(pos_index.view(-1))
-            pos_batches.append(torch.LongTensor([cnt_batch for _ in range(pos_index.size()[0])]))
-            cnt_batch += 1
-
-        if not hasattr(data, 'pos'):
-            new_data = data.__class__(data.x, edge_index, edge_attr, data.y, None, pos_enc=torch.cat(pos_encs, dim=0),
-                                      pos_index=torch.cat(pos_indices, dim=0), pos_batch=torch.cat(pos_batches, dim=0))
-        elif not hasattr(data, 'name'):
-            new_data = data.__class__(data.x, edge_index, edge_attr, data.y, None, pos_enc=torch.cat(pos_encs, dim=0),
-                                      pos_index=torch.cat(pos_indices, dim=0), pos_batch=torch.cat(pos_batches, dim=0))
-        else:
-            new_data = data.__class__(data.x, edge_index, edge_attr, data.y, pos=data.pos,
-                                      pos_enc=torch.cat(pos_encs, dim=0), pos_index=torch.cat(pos_indices, dim=0),
-                                      pos_batch=torch.cat(pos_batches, dim=0), name=data.name, node_type=data.node_type)
-    return new_data
-
-
-# TODO: modify this function to get TOP-K subgraphs of each node
-def k_hop_subgraph(node_idx, num_hops, edge_index, relabel_nodes=False,
-                   num_nodes=None, flow='source_to_target', node_label='hop',
-                   max_nodes_per_hop=None):
-    num_nodes = maybe_num_nodes(edge_index, num_nodes)
-    col, row = edge_index
-
-    node_mask = row.new_empty(num_nodes, dtype=torch.bool)
-    edge_mask = row.new_empty(row.size(0), dtype=torch.bool)
-
-    subsets = [torch.tensor([node_idx], device=row.device).flatten()]
-    visited = set(subsets[-1].tolist())
-    label = defaultdict(list)
-    for node in subsets[-1].tolist():
-        label[node].append(1)
-    if node_label == 'hop':
-        hops = [torch.LongTensor([0], device=row.device).flatten()]
-    for h in range(num_hops):
-        node_mask.fill_(False)
-        node_mask[subsets[-1]] = True
-        torch.index_select(node_mask, 0, row, out=edge_mask)
-        new_nodes = col[edge_mask]  # select the 1-hop neighbors
-        tmp = []
-        for node in new_nodes.tolist():
-            if node in visited:
-                continue
-            tmp.append(node)
-            label[node].append(h + 2)
-        if len(tmp) == 0:
-            break
-        # if max_nodes_per_hop is not None:
-        #     if max_nodes_per_hop < len(tmp):
-        #         tmp = random.sample(tmp, max_nodes_per_hop)
-        new_nodes = set(tmp)
-        visited = visited.union(new_nodes)
-        new_nodes = torch.tensor(list(new_nodes), device=row.device)
-        subsets.append(new_nodes)
-        if node_label == 'hop':
-            hops.append(torch.LongTensor([h + 1] * len(new_nodes), device=row.device))
-    subset = torch.cat(subsets)
-    inverse_map = torch.tensor(range(subset.shape[0]))
-    if node_label == 'hop':
-        hop = torch.cat(hops)
-    # Add `node_idx` to the beginning of `subset`.
-    subset = subset[subset != node_idx]
-    subset = torch.cat([torch.tensor([node_idx], device=row.device), subset])
-
-    z = None
-    if node_label == 'hop':
-        hop = hop[hop != 0]
-        hop = torch.cat([torch.LongTensor([0], device=row.device), hop])
-        z = hop.unsqueeze(1)
-
-    node_mask.fill_(False)
-    node_mask[subset] = True
-    edge_mask = node_mask[row] & node_mask[col]
-
-    edge_index = edge_index[:, edge_mask]
-
-    if relabel_nodes:
-        node_idx = row.new_full((num_nodes,), -1)
-        node_idx[subset] = torch.arange(subset.size(0), device=row.device)
-        edge_index = node_idx[edge_index]
-
-    return subset, edge_index, edge_mask, z
-
-
 def maybe_num_nodes(index, num_nodes=None):
     return index.max().item() + 1 if num_nodes is None else num_nodes
 
@@ -311,41 +139,6 @@ def k_hop_random_walk(hop=1, walks=10, subs=5):
         candidate_sets[node] = subgraphs[0]
 
     return candidate_sets
-
-
-def subgraph_padding(candidate_set):
-    max_nodes = max([subgraph.num_nodes for subgraph in candidate_set])
-    max_edges = max([subgraph.num_edges for subgraph in candidate_set])
-    padded_subgraphs = []
-    masks = []
-
-    for key in candidate_set:
-        mask, padded_subgraph = subgraph_process(max_edges, max_nodes, key)
-        padded_subgraphs.append(padded_subgraph)
-        masks.append(mask)
-
-    # Create a batch from padded subgraphs
-    # batch = Batch.from_data_list(padded_subgraphs)
-
-    # Stack the masks into a tensor
-    mask_tensor = torch.stack(masks)
-    return padded_subgraphs, mask_tensor
-
-
-def subgraph_process(max_edges, max_nodes, subgraph):
-    num_nodes_to_pad = max_nodes - subgraph.num_nodes
-    num_edges_to_pad = max_edges - subgraph.num_edges
-    # Pad node features, edge indices, and edge attributes
-    padded_x = torch.cat([subgraph.x, torch.zeros((num_nodes_to_pad, subgraph.x.shape[1]))], dim=0)
-    padded_edge_index = torch.cat([subgraph.edge_index,
-                                   torch.zeros((2, num_edges_to_pad), dtype=torch.long)], dim=1)
-    padded_edge_attr = torch.cat([subgraph.edge_attr,
-                                  torch.zeros((num_edges_to_pad, subgraph.edge_attr.shape[1]))], dim=0)
-    # Create mask
-    mask = torch.cat([torch.ones(subgraph.num_nodes, dtype=torch.uint8),
-                      torch.zeros(num_nodes_to_pad, dtype=torch.uint8)], dim=0)
-    padded_subgraph = Data(x=padded_x, edge_index=padded_edge_index, edge_attr=padded_edge_attr)
-    return mask, padded_subgraph
 
 
 def neighbors(fringe, A):
@@ -629,3 +422,26 @@ def val_to_distribution(mean, var) -> torch.Tensor:
     x = np.linspace(mean - 3 * sigma, mean + 3 * sigma, 128)
     y = torch.Tensor(norm.pdf(x).astype(float).tolist())
     return y
+
+
+def wasserstein_loss(dist1, dist2, num_samples=1000):
+
+    # Generate samples from the predicted distribution
+    samples1 = dist1.sample((num_samples,))
+
+    # Calculate the cumulative distribution functions (CDFs)
+    cdf1 = dist1.cdf(samples1)
+    cdf2 = dist2.cdf(samples1)
+
+    # Sort the samples and CDF values
+    sorted_samples1, _ = torch.sort(samples1)
+    sorted_cdf1, _ = torch.sort(cdf1)
+    sorted_cdf2, _ = torch.sort(cdf2)
+
+    # Calculate the differences in CDF values
+    differences = sorted_cdf1 - sorted_cdf2
+
+    # Calculate the Wasserstein loss as the negative mean of the differences
+    wasserstein_loss = torch.abs(torch.mean(differences))
+
+    return wasserstein_loss

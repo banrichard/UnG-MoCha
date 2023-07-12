@@ -1,30 +1,22 @@
-import torch
-import os
-import numpy as np
-import logging
 import datetime
-import sys
 import gc
 import json
+import logging
+import os
+import sys
 import time
-import torch.nn.functional as F
 import warnings
 
-import scipy.stats as stats
-import torch_geometric.utils
+import numpy as np
+import torch
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
-from torch_geometric.data import Data
 
-import utils.dataloader
-from graph_converter import Converter
 from model.CountingNet import EdgeMean
-from motif_processor import QueryPreProcessing, Queryset, _to_datasets
-from utils.loss_cal import bp_compute_large10_abmae, bp_compute_abmae
-from utils.utils import anneal_fn, _to_cuda, _to_dataloaders, data_split_cv, print_eval_res, \
-    get_linear_schedule_with_warmup, val_to_distribution
-from utils.graph_operator import load_graph, k_hop_induced_subgraph, random_walk_on_subgraph, create_batch, \
+from motif_processor import QueryPreProcessing, Queryset
+from utils.graph_operator import load_graph, create_batch, \
     k_hop_induced_subgraph_edge, random_walk_on_subgraph_edge
-from utils.batch import Batch
+from utils.utils import wasserstein_loss
 
 warnings.filterwarnings("ignore")
 INF = float("inf")
@@ -59,7 +51,7 @@ train_config = {
     "bp_loss_slp": "anneal_cosine$1.0$0.01",  # 0, 0.01, logistic$1.0$0.01, linear$1.0$0.01, cosine$1.0$0.01,
     # cyclical_logistic$1.0$0.01, cyclical_linear$1.0$0.01, cyclical_cosine$1.0$0.01
     # anneal_logistic$1.0$0.01, anneal_linear$1.0$0.01, anneal_cosine$1.0$0.01
-    "lr": 0.001,
+    "lr": 0.0004,
     "weight_decay": 0.0005,
     "weight_decay_var": 0.1,
     "weight_decay_film": 0.0001,
@@ -110,9 +102,9 @@ train_config = {
 
     "queryset_dir": "queryset",
     "true_card_dir": "label",
-    "dataset": "krogan",
+    "dataset": "intel",
     "data_dir": "dataset",
-    "dataset_name": "krogan_core.txt",
+    "dataset_name": "intel.txt",
     "save_res_dir": "result",
     "save_model_dir": "saved_model",
     'init_g_dim': 1,
@@ -205,9 +197,8 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
             #     'weight_decay_var'] * bp_crit(
             #     pred_var, var) + train_config[
             #               "weight_decay_film"] * filmreg
-            bp_loss = torch.distributions.kl_divergence(distribution,
-                                                        torch.distributions.Normal(card, torch.sqrt(var))) + \
-                      train_config["weight_decay_film"] * filmreg
+            bp_loss = wasserstein_loss(torch.distributions.Normal(loc=card, scale=torch.sqrt(var)), distribution) \
+                      + train_config["weight_decay_film"] * filmreg
         else:
             distribution = model(motif_x, motif_edge_index, motif_edge_attr, graph)
             # pred, pred_var = model(motif_x, motif_edge_index, motif_edge_attr, graph)
@@ -216,7 +207,7 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
             # bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) + config['weight_decay_var'] * bp_crit(
             #     pred_var, var)
             # bp_loss = -distribution.log_prob(card).mean()
-            bp_loss = torch.distributions.kl_divergence(distribution, torch.distributions.Normal(card, torch.sqrt(var)))
+            bp_loss = wasserstein_loss(torch.distributions.Normal(loc=card, scale=torch.sqrt(var)), distribution)
         reg_loss = bp_loss
 
         # if isinstance(config["bp_loss_slp"], (int, float)):
@@ -350,17 +341,17 @@ def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=N
                 #           + config['weight_decay_var'] * bp_crit(pred_var, var) \
                 #           + train_config["weight_decay_film"] * filmreg
                 gt_distribution = torch.distributions.Normal(card, torch.sqrt(var))
-                bp_loss = torch.distributions.kl_divergence(distribution_cpu, gt_distribution) + train_config[
+                bp_loss = wasserstein_loss(gt_distribution, distribution_cpu) + train_config[
                     "weight_decay_film"] * filmreg.cpu()  # -distribution_cpu.log_prob(card).mean()
             else:
                 st = time.time()
                 distribution = model(motif_x, motif_edge_index, motif_edge_attr, graph)
-                distribution = distribution.cpu()
+                distribution_cpu = torch.distributions.Normal(distribution.mean.cpu(), distribution.stddev.cpu())
                 # y_pred = val_to_distribution(pred, pred_var).cpu()
                 # bp_loss = (1 - config['weight_decay_var']) * bp_crit(pred, card) + config['weight_decay_var'] * bp_crit(
                 #     pred_var, var)
                 #
-                bp_loss = -distribution.log_prob(card).mean()
+                bp_loss = wasserstein_loss(gt_distribution, distribution_cpu)
             et = time.time()
             # pred,alpha,beta = model(pattern, pattern_len, pattern_e_len, graph, graph_len, graph_e_len)
             evaluate_results["time"]["total"] += (et - st)

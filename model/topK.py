@@ -118,7 +118,6 @@ class TopKEdgePooling(MessagePassing):
     ) -> tuple[Tensor, Tensor, Tensor, Tensor | Any]:
         if batch is None:
             batch = edge_index.new_zeros(x.size(0))
-        adj = SparseTensor(row=edge_index[0], col=edge_index[1], sparse_sizes=(x.size(0), x.size(0))).t()
         score = self.propagate(edge_index=edge_index, edge_attr=edge_attr, x=x)
         score = score.sum(dim=-1)
         score = self.nonlinearity(score / self.mlp.fc2.weight.norm(p=2, dim=-1))
