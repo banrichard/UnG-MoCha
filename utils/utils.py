@@ -424,24 +424,3 @@ def val_to_distribution(mean, var) -> torch.Tensor:
     return y
 
 
-def wasserstein_loss(dist1, dist2, num_samples=1000):
-
-    # Generate samples from the predicted distribution
-    samples1 = dist1.sample((num_samples,))
-
-    # Calculate the cumulative distribution functions (CDFs)
-    cdf1 = dist1.cdf(samples1)
-    cdf2 = dist2.cdf(samples1)
-
-    # Sort the samples and CDF values
-    sorted_samples1, _ = torch.sort(samples1)
-    sorted_cdf1, _ = torch.sort(cdf1)
-    sorted_cdf2, _ = torch.sort(cdf2)
-
-    # Calculate the differences in CDF values
-    differences = sorted_cdf1 - sorted_cdf2
-
-    # Calculate the Wasserstein loss as the negative mean of the differences
-    wasserstein_loss = torch.abs(torch.mean(differences))
-
-    return wasserstein_loss

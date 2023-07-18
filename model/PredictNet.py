@@ -138,10 +138,10 @@ class FilmSumPredictNet(BasePoolPredictNet):
         y = F.relu(y)
         var = self.pred_var(y_var)
         var = F.relu(var)
-        distribution = torch.distributions.Normal(loc=y + self.epsilon, scale=torch.sqrt(var) + self.epsilon)
+        # distribution = torch.distributions.Normal(loc=y + self.epsilon, scale=torch.sqrt(var) + self.epsilon)
         # return y
         filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
-        return distribution, filmreg
+        return y, var, filmreg
 
 
 class DIAMNet(nn.Module):

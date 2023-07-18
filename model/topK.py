@@ -2,85 +2,15 @@ from typing import Callable, Optional, Tuple, Union, Any
 
 import torch
 from torch import Tensor
-from torch.nn import Parameter
 from torch_geometric.nn import MessagePassing
-from torch_scatter import scatter_add, scatter_max
-
-from torch_geometric.utils import softmax
-
-from torch_geometric.utils.num_nodes import maybe_num_nodes
 from torch_geometric.nn.pool.topk_pool import topk, filter_adj
-from torch_geometric.nn.inits import uniform
+import torch.nn.functional as f
+from torch_geometric.utils import dense_to_sparse, softmax, add_remaining_self_loops
+from torch_scatter import scatter_add
 from torch_sparse import SparseTensor
-
+from torch.sparse import Tensor as st
 from model.MLP import MLP
-
-
-# def topk(
-#         score: Tensor,
-#         batch: Tensor,
-#         min_score: Optional[float] = None,
-#         ratio: Optional[Union[float, int]] = None,
-#         tol: float = 1e-7,
-# ) -> Tensor:
-#     if min_score is not None:
-#         # Make sure that we do not drop all edges in a graph.
-#         scores_max = scatter_max(score, batch)[0].index_select(0, batch) - tol
-#         scores_min = scores_max.clamp(max=min_score)
-#
-#         perm = (score > scores_min).nonzero().view(-1)
-#     elif ratio is not None:
-#         batch_edge = edge_index[0]
-#         # num_nodes = scatter_add(batch.new_ones(x.size(0)), batch, dim=0)
-#         # problem found here
-#         num_edges = scatter_add(edge_index[0].new_ones(score.size(0)), batch_edge, dim=0)
-#         # batch_size, max_num_nodes = batch.size(0), int(num_nodes.max())
-#         batch_edge_size, max_num_edges = batch_edge.size(0), int(batch_edge.max())
-#         # cum_num_nodes = torch.cat(
-#         #     [num_nodes.new_zeros(1),
-#         #      num_nodes.cumsum(dim=0)[:-1]], dim=0)
-#         cum_num_edges = torch.cat([num_edges.new_zeros(1), num_edges.cumsum(dim=0)[:-1]], dim=0)
-#         # edge_index = edge_index.T
-#         index_edge = torch.arange(batch_edge.size(0), dtype=torch.long, device=batch_edge.device)
-#         index_edge = (index_edge - cum_num_edges[batch_edge]) + (batch_edge * max_num_edges)
-#         # index = torch.arange(batch.size(0), dtype=torch.long, device=x.device)
-#         # index = (index - cum_num_nodes[batch]) + (batch * max_num_nodes)
-#         dense_edge = score.new_full((batch_edge_size * max_num_edges,), 0)
-#         # # dense_x = score.new_full((batch_size * max_num_nodes,), -60000.0)
-#         dense_edge[index_edge] = score
-#         dense_edge = dense_edge.view(batch_edge_size, max_num_edges)
-#         # dense_x[index] = score
-#         # dense_x = dense_x.view(batch_size, max_num_nodes)
-#         _, perm_edge = score.sort(dim=-1, descending=True)
-#         # _, perm = dense_x.sort(dim=-1, descending=True)
-#         perm_edge = perm_edge + cum_num_edges.view(-1, 1)
-#         perm_edge = perm_edge.view(-1)
-#         # perm = perm + cum_num_nodes.view(-1, 1)
-#         # perm = perm.view(-1)
-#
-#         if ratio >= 1:
-#             # k = num_nodes.new_full((num_nodes.size(0),), int(ratio))
-#             # k = torch.min(k, num_nodes)
-#             k = batch_edge.new_full((batch_edge.size(0),), int(ratio))
-#             k = torch.min(k, batch_edge)
-#         else:
-#             # k = (float(ratio) * num_nodes.to(score.dtype)).ceil().to(torch.long)
-#             k = (float(ratio) * batch_edge.to(score.dtype)).ceil().to(torch.long)
-#         # mask = [
-#         #     torch.arange(k[i], dtype=torch.long, device=score.device) +
-#         #     i * max_num_nodes for i in range(batch_size)
-#         # ]
-#         edge_mask = [torch.arange(k[i], dtype=torch.long, device=score.device) + i * max_num_edges for i in
-#                      range(batch_edge_size)]
-#         # mask = torch.cat(mask, dim=0)
-#         edge_mask = torch.cat(edge_mask, dim=0)
-#         perm_edge = perm_edge[edge_mask]
-#
-#     else:
-#         raise ValueError("At least one of 'min_score' and 'ratio' parameters "
-#                          "must be specified")
-#
-#     return perm_edge
+from model.sparse_softmax import Sparsemax
 
 
 # TODO： try gumble_softmax method to sparse the subgraphs
@@ -95,6 +25,9 @@ class TopKEdgePooling(MessagePassing):
             min_score: Optional[float] = None,
             ratio: Union[int, float] = None,
             nonlinearity: Callable = torch.tanh,
+            epsilon=1e-6,
+            negative_slop=0.2,
+            lamb=0.1
     ):
         super().__init__()
 
@@ -102,8 +35,13 @@ class TopKEdgePooling(MessagePassing):
         self.min_score = min_score
         self.ratio = ratio
         self.nonlinearity = nonlinearity
-
+        self.epsilon = epsilon
+        self.negative_slop = negative_slop
         self.mlp = MLP(in_channels * 3, in_channels, 1)
+        self.att = torch.nn.Parameter(torch.Tensor(1, 3))
+        self.sparse_attention = Sparsemax()
+        self.lamb = lamb
+        torch.nn.init.xavier_uniform(self.att)
 
     def message(self, x_i: Tensor, x_j: Tensor, edge_attr: Tensor) -> Tensor:
         score = self.mlp(torch.concat((x_i, x_j, edge_attr), dim=1))
@@ -115,20 +53,52 @@ class TopKEdgePooling(MessagePassing):
             edge_index: Tensor,
             edge_attr: Tensor,
             batch: Optional[Tensor] = None
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor | Any]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         if batch is None:
             batch = edge_index.new_zeros(x.size(0))
-        score = self.propagate(edge_index=edge_index, edge_attr=edge_attr, x=x)
-        score = score.sum(dim=-1)
-        score = self.nonlinearity(score / self.mlp.fc2.weight.norm(p=2, dim=-1))
-        perm = topk(score, self.ratio, batch, self.min_score)
-        x = x[perm] * score[perm].view(-1, 1)
 
+        score = self.propagate(edge_index=edge_index, edge_attr=edge_attr, x=x)
+        score = torch.abs(score).sum(dim=-1)
+        perm = topk(score, self.ratio, batch, self.min_score)
+        # update node feature
+        x = x[perm]
         batch = batch[perm]
         edge_index, edge_attr = filter_adj(edge_index=edge_index, edge_attr=edge_attr, perm=perm,
                                            num_nodes=score.size(0))
 
+        row, col = edge_index
+        weights = (torch.cat([x[row][:, 0].view(-1, 1), x[col][:, 0].view(-1, 1), edge_attr[:, 0].view(-1, 1)],
+                             dim=1) * self.att).sum(dim=-1)
+        weights = f.leaky_relu(weights, self.negative_slop) + edge_attr[:, 0] * self.lamb
+        non_zero_mask = weights != 0
+        # Filter values and indices using the mask
+        filtered_values = weights[non_zero_mask]
+        filtered_indices = edge_index[:, non_zero_mask]
+        row, col = filtered_indices[0, :], filtered_indices[1, :]
+        edge_attr = softmax(filtered_values, row, num_nodes=x.size(0))
+        edge_attr = edge_attr.view(-1, 1).expand(-1, 128)
+        # filter out zero weight edges
         return x, edge_index, edge_attr, batch
+
+    def gumbel_softmax(self, logits, temperature=1.0, hard=False):
+        gumbel_noise = torch.rand_like(logits)
+        gumbel_noise = -torch.log(-torch.log(gumbel_noise + self.epsilon) + self.epsilon)
+
+        # Add the Gumbel noise to the logits
+        logits_gumbel = (logits + gumbel_noise) / temperature
+
+        # Apply softmax to obtain the Gumbel-Softmax distribution
+        probs = f.softmax(logits_gumbel, dim=-1)
+
+        if hard:
+            # Hard Gumbel-Softmax by sampling the argmax
+            _, argmax = torch.max(probs, dim=-1)
+            one_hot = torch.zeros_like(logits).scatter_(-1, argmax.unsqueeze(-1), 1.0)
+            probs_hard = (one_hot - probs).detach() + probs
+
+            return probs_hard
+
+        return probs
 
     def __repr__(self) -> str:
         if self.min_score is None:
