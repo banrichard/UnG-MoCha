@@ -125,6 +125,8 @@ def data_graph_transform(data_dir, dataset, dataset_name, emb=None):
     cnt = 0
     for edge in graph.edges(data=True):
         subgraph = k_hop_induced_subgraph_edge(graph, edge)
+        if subgraph.number_of_nodes() < 3:
+            continue
         if train_config['GSL']:
             candidate_sets[cnt] = subgraph
         else:
@@ -392,7 +394,7 @@ def test(save_model_dir, test_loaders, config, graph, logger, writer):
     total_test_time = 0
     model.load_state_dict(torch.load(
         os.path.join(save_model_dir,
-                     'best_epoch_{:s}_{:s}_edge_bce.pt'.format(config['predict_net'], config['graph_net']))))
+                     'best_epoch_{:s}_{:s}_edge_gsl.pt'.format(config['predict_net'], config['graph_net']))))
     # print(model)
     mean_reg_loss, mean_bp_loss, mean_var_loss, evaluate_results, _time = evaluate(model=model, data_type="test",
                                                                                    data_loader=test_loaders,
@@ -406,7 +408,7 @@ def test(save_model_dir, test_loaders, config, graph, logger, writer):
     logger.info(
         "data_type: {:<5s}\tbest mean loss: {:.3f}".format("test", mean_reg_loss))
     with open(os.path.join(save_model_dir,
-                           '%s_%s_%s_%s_edge_bce.json' % (
+                           '%s_%s_%s_%s_edge_gsl.json' % (
                                    train_config['predict_net'], train_config['graph_net'], "best_test",
                                    train_config['dataset']
                            )), "w") as f:
@@ -569,8 +571,8 @@ if __name__ == "__main__":
                                                                                       epoch))
             torch.save(model.state_dict(),
                        os.path.join(save_model_dir,
-                                    'best_epoch_{:s}_{:s}_edge.pt'.format(train_config['predict_net'],
-                                                                          train_config['graph_net'])))
+                                    'best_epoch_{:s}_{:s}_edge_gsl.pt'.format(train_config['predict_net'],
+                                                                              train_config['graph_net'])))
             with open(os.path.join(save_model_dir, '%s_%d.json' % ("val", epoch)), "w") as f:
                 json.dump(evaluate_results, f)
                 # for data_type in data_loaders.keys():

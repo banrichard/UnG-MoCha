@@ -17,6 +17,7 @@ from collections import defaultdict, OrderedDict
 import scipy.sparse as ssp
 import numpy as np
 import networkx as nx
+from torch_sparse import spspmm, coalesce
 from tqdm import tqdm
 
 from .batch import Batch
@@ -424,3 +425,18 @@ def val_to_distribution(mean, var) -> torch.Tensor:
     return y
 
 
+def neighbor_aug(edge_index, edge_attr, num_nodes):
+    n = num_nodes
+    fill = 1e16
+    value = edge_index.new_full((edge_index.size(1),), fill, dtype=torch.float)
+
+    index, value = spspmm(edge_index, value, edge_index, value, n, n, n, True)
+
+    edge_index = torch.cat([edge_index, index], dim=1)
+    value = value.view(-1, *[1 for _ in range(edge_attr.dim() - 1)])
+    value = value.expand(-1, *list(edge_attr.size())[1:])
+    edge_attr = torch.cat([edge_attr, value], dim=0)
+    edge_index, edge_attr = coalesce(edge_index, edge_attr, n, n, op='min')
+    edge_attr[edge_attr >= fill] = 0
+
+    return edge_index, edge_attr

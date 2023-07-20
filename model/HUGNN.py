@@ -24,7 +24,7 @@ class NestedGIN(torch.nn.Module):
         # self.mlp_in_ch = self.num_expert * self.out_g_ch if self.pool_type == "att" else self.out_g_ch
         self.convs = nn.ModuleList()
         cov_layer = self.build_conv_layers(model_type)
-        self.pooling = TopKEdgePooling(in_channels=self.input_dim, ratio=0.3, min_score=None)
+        self.pooling = TopKEdgePooling(in_channels=self.input_dim, ratio=None, min_score=0.3)
         for l in range(self.num_layers):
             hidden_input_dim = self.input_dim if l == 0 else self.num_hid
             hidden_output_dim = self.num_hid
