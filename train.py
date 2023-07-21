@@ -51,9 +51,9 @@ train_config = {
     "bp_loss_slp": "anneal_cosine$1.0$0.01",  # 0, 0.01, logistic$1.0$0.01, linear$1.0$0.01, cosine$1.0$0.01,
     # cyclical_logistic$1.0$0.01, cyclical_linear$1.0$0.01, cyclical_cosine$1.0$0.01
     # anneal_logistic$1.0$0.01, anneal_linear$1.0$0.01, anneal_cosine$1.0$0.01
-    "lr": 0.0004,
+    "lr": 0.0008,
     "weight_decay": 0.0005,
-    "weight_decay_var": 0.1,
+    "weight_decay_var": 0.5,
     "weight_decay_film": 0.0001,
     "decay_factor": 0.7,
     "decay_patience": 20,
@@ -102,9 +102,9 @@ train_config = {
 
     "queryset_dir": "queryset",
     "true_card_dir": "label",
-    "dataset": "intel",
+    "dataset": "krogan",
     "data_dir": "dataset",
-    "dataset_name": "intel.txt",
+    "dataset_name": "krogan_core.txt",
     "save_res_dir": "result",
     "save_model_dir": "saved_model",
     'init_g_dim': 1,
@@ -125,8 +125,6 @@ def data_graph_transform(data_dir, dataset, dataset_name, emb=None):
     cnt = 0
     for edge in graph.edges(data=True):
         subgraph = k_hop_induced_subgraph_edge(graph, edge)
-        if subgraph.number_of_nodes() < 3:
-            continue
         if train_config['GSL']:
             candidate_sets[cnt] = subgraph
         else:

@@ -9,7 +9,7 @@ from model.motifNet import MotifGNN
 
 
 class EdgeMean(GraphModel):
-    def __init__(self, config):
+    def __init__(self, config, training=True):
         super(EdgeMean, self).__init__(config)
 
         # self.ignore_norm = config["rgcn_ignore_norm"]
@@ -21,7 +21,7 @@ class EdgeMean(GraphModel):
         self.g_net, g_dim = self.create_graph_net(
             hidden_dim=config["num_g_hid"],
             num_layers=config["graph_num_layers"], num_e_hid=128,
-            dropout=self.dropout, model_type=config['graph_net'])
+            dropout=self.dropout, model_type=config['graph_net'], training=True)
 
         self.p_net, p_dim = self.create_pattern_net(
             name="pattern", input_dim=p_emb_dim, hidden_dim=config["ppn_hidden_dim"],
@@ -50,7 +50,7 @@ class EdgeMean(GraphModel):
         model_type = kwargs.get("model_type", "GINE")
         out_dim = kwargs.get("out_dim", 64)
         net = NestedGIN(num_layers=num_layers, input_dim=input_dim, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim,
-                        model_type=model_type, out_dim=out_dim, dropout=dropout)
+                        model_type=model_type, out_dim=out_dim, dropout=dropout, training=True)
         return net, out_dim
 
     def create_pattern_net(self, input_dim, **kwargs):

@@ -45,9 +45,11 @@ class Batch(Data):
 
         cumsum = {key: 0 for key in keys}
         batch.batch = []
+        batch.edge_batch = []
         # sizes = [len(subgraph.x) for subgraph in data_list]
         # data_list = [subgraph for _, subgraph in sorted(zip(sizes, data_list), reverse=True)]
         # sizes.sort(reverse=True)
+        # read from each subgraph
         for i, data in enumerate(data_list):
             for key in data.keys:  # x,edge_idx,edge_attr
                 item = data[key]
@@ -73,13 +75,17 @@ class Batch(Data):
                     batch['{}_batch'.format(key)].append(item)
 
             num_nodes = data.num_nodes
+            num_edges = data.num_edges
             if num_nodes is not None:
                 item = torch.full((num_nodes,), i, dtype=torch.long)
                 batch.batch.append(item)
-
+            if num_edges is not None:
+                edge_item = torch.full((num_edges,), i, dtype=torch.long)
+                batch.edge_batch.append(edge_item)
         if num_nodes is None:
             batch.batch = None
-
+        if num_edges is None:
+            batch.edge_batch = None
         for key in batch.keys:
             item = batch[key][0]
             if torch.is_tensor(item):
@@ -139,8 +145,18 @@ class Batch(Data):
         """Returns the number of graphs in the batch."""
         return self.batch[-1].item() + 1
 
-    def padding(self, data_list):
-        max_len = max([data.edge_index.size(1) for data in data_list])
-        for (i, data) in enumerate(data_list):
-            if data.edge_index.size(1) < max_len:
-                data.x.expand(data.num_nodes, max_len)
+
+if __name__ == "__main__":
+    batch = []
+    x2 = torch.tensor([[0], [1], [2]], dtype=torch.float)
+    edge_index2 = torch.tensor([[0, 1, 2], [1, 0, 1]], dtype=torch.long)
+    edge_attr2 = torch.tensor([[0.2], [0.3], [0.4]], dtype=torch.float)
+    batch.append(Data(x=x2, edge_index=edge_index2, edge_attr=edge_attr2))
+    x3 = torch.tensor([[3], [4], [5], [6]], dtype=torch.float)
+    edge_index3 = torch.tensor([[3, 4, 5, 6], [4, 5, 6, 3]], dtype=torch.long)
+    edge_attr3 = torch.tensor([[0.2], [0.3], [0.4], [0.5]], dtype=torch.float)
+    batch.append(Data(x=x3, edge_index=edge_index3, edge_attr=edge_attr3))
+    pyg_batch = Batch.from_data_list(batch)
+    print(pyg_batch)
+    # topk_sample = TopKEdgePooling(ratio=0.5)
+    # y = topk_sample(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)

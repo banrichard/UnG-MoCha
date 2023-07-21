@@ -18,10 +18,11 @@ class MLP(nn.Module):
         self.fc1 = torch.nn.Linear(in_ch, hid_ch)
         self.fc2 = torch.nn.Linear(hid_ch, out_ch)
         self.reset_parameters()
+
     def reset_parameters(self):
-        torch.nn.init.uniform(self.fc1.weight)
+        torch.nn.init.xavier_uniform_(self.fc1.weight)
         torch.nn.init.zeros_(self.fc1.bias)
-        torch.nn.init.uniform(self.fc2.weight)
+        torch.nn.init.xavier_uniform_(self.fc2.weight)
         torch.nn.init.zeros_(self.fc2.bias)
 
     def forward(self, x):
