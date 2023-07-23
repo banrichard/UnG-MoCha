@@ -14,9 +14,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from model.CountingNet import EdgeMean
 from motif_processor import QueryPreProcessing, Queryset
-from utils.graph_operator import load_graph, create_batch, \
-    k_hop_induced_subgraph_edge, random_walk_on_subgraph_edge
-from utils.loss_cal import wasserstein_loss
+from utils.graph_operator import data_graph_transform
+
 
 warnings.filterwarnings("ignore")
 INF = float("inf")
@@ -113,26 +112,6 @@ train_config = {
     "GSL": True
 
 }
-
-
-def data_graph_transform(data_dir, dataset, dataset_name, emb=None):
-    graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
-                       emb=emb)
-    candidate_sets = {}
-    # for node in range(graph.number_of_nodes()):
-    #     subgraph = k_hop_induced_subgraph(graph, node)
-    #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
-    cnt = 0
-    for edge in graph.edges(data=True):
-        subgraph = k_hop_induced_subgraph_edge(graph, edge)
-        if train_config['GSL']:
-            candidate_sets[cnt] = subgraph
-        else:
-            candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
-        cnt += 1
-    batch = create_batch(graph, candidate_sets, emb=emb, edge_base=True)
-    return batch
-
 
 def train(model, optimizer, scheduler, data_type, data_loader, device, config, epoch, graph, logger=None, writer=None,
           bottleneck=False):
@@ -482,7 +461,7 @@ if __name__ == "__main__":
     # train_loaders, val_loaders, test_loaders = _to_dataloaders(train_sets), _to_dataloaders(val_sets), _to_dataloaders(
     #     test_sets)
     graph = data_graph_transform(train_config['data_dir'], train_config['dataset'],
-                                 train_config['dataset_name'])  # ./dataset/krogan/graph_batch.pt"
+                                 train_config['dataset_name'],gsl=train_config["GSL"])  # ./dataset/krogan/graph_batch.pt"
     # config['init_g_dim'] = graph.x.size(1)
     # train_config.update({'init_g_dim': graph.x.size(1)})
     # construct the model

@@ -1,9 +1,8 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-from torch_geometric.nn import GINConv, GINEConv, global_mean_pool, global_add_pool, TopKPooling
+from torch_geometric.nn import GINConv, GINEConv, global_mean_pool, global_add_pool
 from model.topK import TopKEdgePooling
-from utils.dataloader import DataLoader
 
 
 class NestedGIN(torch.nn.Module):
@@ -52,7 +51,7 @@ class NestedGIN(torch.nn.Module):
 
     def forward(self, data):
         data = data.cuda()
-        edge_index, edge_attr, batch = data.edge_index, data.edge_attr, data.node_to_subgraph
+        edge_index, edge_attr, batch, edge_batch = data.edge_index, data.edge_attr, data.node_to_subgraph, data.edge_to_subgraph
         edge_attr = edge_attr.view(-1, 1).expand(-1, self.num_e_hid)
         if 'x' in data:
             x = data.x.cuda()
@@ -60,21 +59,27 @@ class NestedGIN(torch.nn.Module):
             x = torch.zeros([edge_index.max() + 1, 1])
             x = x.cuda()
         x, edge_index, edge_attr, batch = self.pooling(x, edge_index=edge_index, edge_attr=edge_attr, batch=batch,
-                                                       training=self.training)
+                                                       edge_batch=edge_batch)
         xs = []
         for layer in range(len(self.convs)):
             if self.model_type == "GIN":
                 x = self.convs[layer](x=x, edge_index=edge_index)
             elif self.model_type == "GINE":
                 x = self.convs[layer](x=x, edge_index=edge_index, edge_attr=edge_attr)
-            if layer == 0:
-                xs = [x]
-
-            else:
-                xs += [x]
             if layer < self.num_layers - 1:
                 x = F.dropout(x, p=self.dropout, training=self.training)
-        x = global_mean_pool(torch.cat(xs, dim=1), batch)
+            if layer == 0:
+                xs = [x]
+            else:
+                xs += [x]
+        x = torch.cat(xs, dim=1)
+        num_nodes = x.size(0)
+        mask = torch.zeros(num_nodes, dtype=torch.bool)
+        mask[edge_index] = 1
+        # Apply mask
+        x = x[mask]
+        batch = batch[mask]
+        x = global_mean_pool(x, batch)
         # final graph representation
         x = global_add_pool(x, data.subgraph_to_graph)
         x = F.relu(self.lin1(x))

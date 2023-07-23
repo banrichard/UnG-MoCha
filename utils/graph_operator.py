@@ -1,6 +1,6 @@
+import os
 import queue
 import random
-import time
 
 import networkx as nx
 import numpy as np
@@ -10,11 +10,28 @@ import torch_geometric.utils
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import from_networkx
+
 from utils.batch import Batch
-import torch.nn.functional as F
 
 
 # from dataloader import DataLoader
+def data_graph_transform(data_dir, dataset, dataset_name, emb=None, gsl=True):
+    graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
+                       emb=emb)
+    candidate_sets = {}
+    # for node in range(graph.number_of_nodes()):
+    #     subgraph = k_hop_induced_subgraph(graph, node)
+    #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
+    cnt = 0
+    for edge in graph.edges(data=True):
+        subgraph = k_hop_induced_subgraph_edge(graph, edge)
+        if gsl:
+            candidate_sets[cnt] = subgraph
+        else:
+            candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
+        cnt += 1
+    batch = create_batch(graph, candidate_sets, emb=emb, edge_base=True)
+    return batch
 
 
 def load_graph(filepath, emb=None) -> nx.Graph:
@@ -191,13 +208,16 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True
     pyg_batch.edge_attr = pyg_batch.edge_attr.to(torch.float32)
     pyg_batch.edge_index = torch.LongTensor(pyg_batch.edge_index)
     pyg_batch.num_nodes = sum(data_.num_nodes for data_ in pyg_subgraphs)
+    pyg_batch.num_edges = sum(data_.num_edges for data_ in pyg_subgraphs)
     pyg_batch.num_subgraphs = len(pyg_subgraphs)
 
     pyg_batch.original_x = pyg_graph.x
     pyg_batch.original_edge_index = pyg_graph.edge_index
     pyg_batch.original_edge_attr = pyg_graph.edge_attr
     pyg_batch.node_to_subgraph = pyg_batch.batch
+    pyg_batch.edge_to_subgraph = pyg_batch.edge_batch
     del pyg_batch.batch
+    del pyg_batch.edge_batch
     pyg_batch.subgraph_to_graph = torch.zeros(pyg_batch.num_subgraphs, dtype=torch.long)
     for k, v in pyg_graph:
         if k not in ['x', 'edge_index', 'edge_attr', 'pos', 'num_nodes', 'batch',

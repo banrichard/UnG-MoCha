@@ -50,6 +50,7 @@ class Batch(Data):
         # data_list = [subgraph for _, subgraph in sorted(zip(sizes, data_list), reverse=True)]
         # sizes.sort(reverse=True)
         # read from each subgraph
+
         for i, data in enumerate(data_list):
             for key in data.keys:  # x,edge_idx,edge_attr
                 item = data[key]
