@@ -11,6 +11,7 @@ from torch.sparse import Tensor as st
 from model.MLP import MLP, FC
 from model.sparse_softmax import Sparsemax
 from utils.graph_operator import data_graph_transform
+import torch.nn.functional as f
 
 
 class EdgeScore(torch.nn.Module):
@@ -23,7 +24,6 @@ class EdgeScore(torch.nn.Module):
         edge_score = self.fc(edge_attr)
 
         # num_edges = edge_index.size(1)
-        edge_score = softmax(src=edge_score, index=batch)
         edge_score = edge_score.view(-1)
         return edge_score
 
@@ -84,11 +84,12 @@ class TopKEdgePooling(torch.nn.Module):
 
         pi = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
         score = self.gumbel_softmax(pi, batch=edge_batch, training=self.training)
+        score = f.leaky_relu(score, self.negative_slop) + self.lamb * edge_attr[:, 0]
         score = score.view(-1)
         perm = topk(score, self.ratio, edge_batch, self.min_score)
         edge_index = edge_index[:, perm]
         edge_attr = edge_attr[perm]
-        edge_batch = edge_batch[perm]
+
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
         return x, edge_index, edge_attr, batch
@@ -114,13 +115,16 @@ class TopKEdgePooling(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    graph = data_graph_transform("../dataset", "krogan", "krogan_core.txt")
+    graph = data_graph_transform("../dataset", "intel", "intel.txt")
     graph = graph.cuda()
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=128)
-    topk_sample.cuda()
     x, edge_index, edge_attr, batch = topk_sample(x=graph.x, edge_index=graph.edge_index,
                                                   edge_attr=graph.edge_attr.view(-1, 1).expand(-1, 128),
                                                   batch=graph.node_to_subgraph, edge_batch=graph.edge_to_subgraph)
+    sparse_max = Sparsemax()
+    output = sparse_max(graph.edge_attr, graph.edge_to_subgraph)
+    topk_sample.cuda()
+
     gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 256),
                                                   torch.nn.ReLU(),
                                                   torch.nn.Linear(256, 256)),

@@ -61,6 +61,7 @@ class Batch(Data):
                 else:
                     size = 1
                 batch.__slices__[key].append(size + batch.__slices__[key][-1])
+
                 if key == 'node_to_subgraph':
                     cumsum[key] = cumsum[key] + data.num_subgraphs
                 elif key == 'subgraph_to_graph':

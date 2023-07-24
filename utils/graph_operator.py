@@ -15,9 +15,9 @@ from utils.batch import Batch
 
 
 # from dataloader import DataLoader
-def data_graph_transform(data_dir, dataset, dataset_name, emb=None, gsl=True):
+def data_graph_transform(data_dir, dataset, dataset_name, batch_path=None, gsl=True):
     graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
-                       emb=emb)
+                       emb=batch_path)
     candidate_sets = {}
     # for node in range(graph.number_of_nodes()):
     #     subgraph = k_hop_induced_subgraph(graph, node)
@@ -30,7 +30,7 @@ def data_graph_transform(data_dir, dataset, dataset_name, emb=None, gsl=True):
         else:
             candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
         cnt += 1
-    batch = create_batch(graph, candidate_sets, emb=emb, edge_base=True)
+    batch = create_batch(graph, candidate_sets, batch_path=batch_path, edge_base=True)
     return batch
 
 
@@ -164,9 +164,8 @@ def random_walk_on_subgraph_edge(subgraph: nx.Graph, edge, walks=20, subs=5) -> 
     return subgraph_with_highest_probability
 
 
-def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True):
+def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_base=True):
     """
-    For current stage, only support 1-hop subgraph(s)
     :param graph: the original graph (the node features are pre-embedded by Node2Vec)
     :param candidate_sets: the candidate subgraph(s) of each node
     :return: a Batch contains subgraph representation
@@ -178,16 +177,15 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True
     # x = torch.ones([graph.number_of_nodes(), 1])
     # x = nx.to_numpy_array(graph,weight='prob')
     # x = torch.from_numpy(x)
-
+    # if os.path.exists(os.path.join("dataset", batch_path)):
+    #     pyg_batch = torch.load(os.path.join("dataset", batch_path))
+    #     return pyg_batch
     pyg_graph = torch_geometric.utils.from_networkx(graph)
-
+    # init the edge count dict: get keys from pyg_graph edge index
+    edge_count = {tuple(edge.numpy()): 0 for edge in pyg_graph.edge_index.t()}
+    edge_freq = []
     x = torch.zeros(len(graph.nodes), 1, dtype=torch.float32)
-    degree = list(graph.degree)
-    for i in range(len(degree)):
-        x[i] = degree[i][1]
     pyg_graph.x = x
-    # get the corresponding subgraph(s) of each node in the graph
-    # for now we randomly select a subgraph (2023.5.15 21:30)
     pyg_subgraphs = []
     if edge_base:
         for cnt in range(graph.number_of_edges()):
@@ -195,6 +193,10 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True
             pyg_subgraph = torch_geometric.utils.from_networkx(subgraph)
             if pyg_subgraph.num_nodes == 0:
                 continue
+            for edge in pyg_subgraph.edge_index.t():
+                # current problem is that the edges from pyg_subgraph may more than original graph
+                if tuple(edge.numpy()) in edge_count.keys():
+                    edge_count[tuple(edge.numpy())] = edge_count.get(tuple(edge.numpy())) + 1
             pyg_subgraphs.append(pyg_subgraph)
     else:
         for node in range(graph.number_of_nodes()):
@@ -203,6 +205,9 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True
             if pyg_subgraph.num_nodes == 0:
                 continue
             pyg_subgraphs.append(pyg_subgraph)
+    edge_count = {k: v for k, v in edge_count.items() if v > 0}
+    edge_freq = torch.tensor([v for v in edge_count.values()], dtype=torch.int)
+
     pyg_batch = Batch.from_data_list(pyg_subgraphs)
     pyg_batch.x = pyg_batch.x.to(torch.float32)
     pyg_batch.edge_attr = pyg_batch.edge_attr.to(torch.float32)
@@ -223,6 +228,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, emb=None, edge_base=True
         if k not in ['x', 'edge_index', 'edge_attr', 'pos', 'num_nodes', 'batch',
                      'z', 'rd', 'node_type']:
             pyg_batch[k] = v
+    torch.save(pyg_batch, os.path.join("dataset", batch_path))
     return pyg_batch
 
 

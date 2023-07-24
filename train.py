@@ -101,9 +101,9 @@ train_config = {
 
     "queryset_dir": "queryset",
     "true_card_dir": "label",
-    "dataset": "krogan",
+    "dataset": "intel",
     "data_dir": "dataset",
-    "dataset_name": "krogan_core.txt",
+    "dataset_name": "intel.txt",
     "save_res_dir": "result",
     "save_model_dir": "saved_model",
     'init_g_dim': 1,
