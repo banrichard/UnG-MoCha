@@ -207,6 +207,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
             pyg_subgraphs.append(pyg_subgraph)
     edge_count = {k: v for k, v in edge_count.items() if v > 0}
     edge_freq = torch.tensor([v for v in edge_count.values()], dtype=torch.int)
+    # add edge freq as the one new edge feature
 
     pyg_batch = Batch.from_data_list(pyg_subgraphs)
     pyg_batch.x = pyg_batch.x.to(torch.float32)
