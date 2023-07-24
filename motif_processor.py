@@ -57,21 +57,6 @@ class QueryPreProcessing(object):
             # print("save decomposed query: {}".format(query_save_path))
         # print("average label density: {}".format(avg_label_den / self.num_queries))
 
-    def node_reorder(self, query, nodes_list, edges_list):
-        idx_dict = {}
-        node_cnt = 0
-        for v in nodes_list:
-            idx_dict[v] = node_cnt
-            node_cnt += 1
-        nodes_list = [(idx_dict[v], {"labels": query.nodes[v]["labels"]})
-                      for v in nodes_list]
-        edges_list = [(idx_dict[u], idx_dict[v], {"labels": query.edges[u, v]["labels"]})
-                      for (u, v) in edges_list]
-        sample = nx.Graph()
-        sample.add_nodes_from(nodes_list)
-        sample.add_edges_from(edges_list)
-        return sample
-
     def load_query(self, query_load_path):
         file = open(query_load_path)
         nodes_list = []

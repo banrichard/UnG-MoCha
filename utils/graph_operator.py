@@ -15,6 +15,23 @@ from utils.batch import Batch
 
 
 # from dataloader import DataLoader
+
+def node_reorder(query, nodes_list, edges_list):
+    idx_dict = {}
+    node_cnt = 0
+    for v in nodes_list:
+        idx_dict[v] = node_cnt
+        node_cnt += 1
+    nodes_list = [(idx_dict[v], {"labels": query.nodes[v]["labels"]})
+                  for v in nodes_list]
+    edges_list = [(idx_dict[u], idx_dict[v], {"edge_attr": query.edges[u, v]["edge_attr"]})
+                  for (u, v) in edges_list]
+    sample = nx.Graph()
+    sample.add_nodes_from(nodes_list)
+    sample.add_edges_from(edges_list)
+    return sample
+
+
 def data_graph_transform(data_dir, dataset, dataset_name, batch_path=None, gsl=True):
     graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
                        emb=batch_path)
@@ -90,7 +107,8 @@ def k_hop_induced_subgraph(graph, src, k=1):
         depth += 1
         if depth >= k:
             break
-    subgraph = nx.subgraph(graph, nodes_list).copy()
+    edges_list = graph.subgraph(nodes_list).edges()
+    subgraph = node_reorder(graph, nodes_list, edges_list)
 
     return subgraph
 
@@ -183,7 +201,6 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
     pyg_graph = torch_geometric.utils.from_networkx(graph)
     # init the edge count dict: get keys from pyg_graph edge index
     edge_count = {tuple(edge.numpy()): 0 for edge in pyg_graph.edge_index.t()}
-    edge_freq = []
     x = torch.zeros(len(graph.nodes), 1, dtype=torch.float32)
     pyg_graph.x = x
     pyg_subgraphs = []
@@ -193,10 +210,18 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
             pyg_subgraph = torch_geometric.utils.from_networkx(subgraph)
             if pyg_subgraph.num_nodes == 0:
                 continue
-            for edge in pyg_subgraph.edge_index.t():
-                # current problem is that the edges from pyg_subgraph may more than original graph
+            edge_attr = torch.zeros_like(pyg_subgraph.edge_index.t())
+            for i in range(pyg_subgraph.edge_index.t().size(0)):
+                edge = pyg_subgraph.edge_index.t()[i]
                 if tuple(edge.numpy()) in edge_count.keys():
                     edge_count[tuple(edge.numpy())] = edge_count.get(tuple(edge.numpy())) + 1
+                    edge_attr[i] = torch.tensor(
+                        (pyg_subgraph.edge_attr[i], torch.tensor(edge_count[tuple(edge.numpy())])))
+            # for edge in pyg_subgraph.edge_index.t():
+            #     # current problem is that the edges from pyg_subgraph may more than original graph
+            #     if tuple(edge.numpy()) in edge_count.keys():
+            #         edge_count[tuple(edge.numpy())] = edge_count.get(tuple(edge.numpy())) + 1
+            pyg_subgraph.edge_attr = edge_attr
             pyg_subgraphs.append(pyg_subgraph)
     else:
         for node in range(graph.number_of_nodes()):
@@ -205,8 +230,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
             if pyg_subgraph.num_nodes == 0:
                 continue
             pyg_subgraphs.append(pyg_subgraph)
-    edge_count = {k: v for k, v in edge_count.items() if v > 0}
-    edge_freq = torch.tensor([v for v in edge_count.values()], dtype=torch.int)
+
     # add edge freq as the one new edge feature
 
     pyg_batch = Batch.from_data_list(pyg_subgraphs)
