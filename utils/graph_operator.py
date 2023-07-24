@@ -211,6 +211,8 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
             if pyg_subgraph.num_nodes == 0:
                 continue
             edge_attr = torch.zeros_like(pyg_subgraph.edge_index.t())
+            edge_attr[:, 0] = pyg_subgraph.edge_attr
+
             for i in range(pyg_subgraph.edge_index.t().size(0)):
                 edge = pyg_subgraph.edge_index.t()[i]
                 if tuple(edge.numpy()) in edge_count.keys():
@@ -253,40 +255,5 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
         if k not in ['x', 'edge_index', 'edge_attr', 'pos', 'num_nodes', 'batch',
                      'z', 'rd', 'node_type']:
             pyg_batch[k] = v
-    torch.save(pyg_batch, os.path.join("dataset", batch_path))
+    # torch.save(pyg_batch, os.path.join("dataset", batch_path))
     return pyg_batch
-
-
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    graph = load_graph("../dataset/krogan/krogan_core.txt", emb_path="../dataset/krogan/embedding/krogan_core.csv")
-    subgraph = k_hop_induced_subgraph(graph, 0)
-    # candidate_sets =(subgraph, 0)
-    candidate_sets = {}
-    for edge in graph.edges(data=True):
-        subgraph = k_hop_induced_subgraph_edge(graph, edge)
-        print(subgraph.edges())
-        nx.draw(subgraph, with_labels=True)
-        plt.show()
-        break
-    for node in range(graph.number_of_nodes()):
-        subgraph = k_hop_induced_subgraph(graph, node)
-        nx.draw(subgraph, with_labels=True)
-        plt.show()
-        break
-    #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
-    # start_time = time.time()
-    # batch = create_batch(graph, candidate_sets)
-    # end_time = time.time()
-    # # torch.save(batch,"../dataset/krogan/graph_batch.pt")
-    # print("running time of batch creation is {}s".format(end_time - start_time))
-    #
-    # # print(candidate_sets[0].edges)
-    # # print(len(candidate_sets[0].edges))
-    # batch = torch.load("../model/graph_batch.pt")
-    # print(batch)
-    # #
-    # loader = DataLoader(batch, batch_size=1, shuffle=False)
-    # #
-    # batch = next(iter(loader))

@@ -18,11 +18,10 @@ class EdgeScore(torch.nn.Module):
     def __init__(self, in_channels, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.in_channels = in_channels
-        self.fc = FC(in_channels, 1)
-
+        self.att = torch.nn.Parameter(torch.Tensor(1, in_channels))
+        torch.nn.init.xavier_uniform_(self.att.data)
     def forward(self, edge_attr, batch):
-        edge_score = self.fc(edge_attr)
-
+        edge_score =  edge_attr * self.att
         # num_edges = edge_index.size(1)
         edge_score = edge_score.view(-1)
         return edge_score
@@ -115,11 +114,12 @@ class TopKEdgePooling(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    graph = data_graph_transform("../dataset", "intel", "intel.txt")
+    graph = data_graph_transform(data_dir="../dataset", dataset="intel", dataset_name="intel.txt")
     graph = graph.cuda()
-    topk_sample = TopKEdgePooling(ratio=0.5, in_channels=128)
+    topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
+    topk_sample.cuda()
     x, edge_index, edge_attr, batch = topk_sample(x=graph.x, edge_index=graph.edge_index,
-                                                  edge_attr=graph.edge_attr.view(-1, 1).expand(-1, 128),
+                                                  edge_attr=graph.edge_attr.view(-1, 2),
                                                   batch=graph.node_to_subgraph, edge_batch=graph.edge_to_subgraph)
     sparse_max = Sparsemax()
     output = sparse_max(graph.edge_attr, graph.edge_to_subgraph)
