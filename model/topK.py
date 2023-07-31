@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 from torch_geometric.nn import MessagePassing, GINConv
 from torch_geometric.nn.pool.topk_pool import topk, filter_adj
-from torch_geometric.utils import dense_to_sparse, softmax
+from torch_geometric.utils import dense_to_sparse, softmax, remove_isolated_nodes
 from torch_scatter import scatter_add
 from torch_sparse import SparseTensor
 from torch.sparse import Tensor as st
@@ -19,11 +19,13 @@ class EdgeScore(torch.nn.Module):
         super().__init__(*args, **kwargs)
         self.in_channels = in_channels
         self.att = torch.nn.Parameter(torch.Tensor(1, in_channels))
+        self.mlp = MLP(in_ch=in_channels, hid_ch=128, out_ch=1)
         torch.nn.init.xavier_uniform_(self.att.data)
+
     def forward(self, edge_attr, batch):
-        edge_score =  edge_attr * self.att
+        edge_score = self.mlp(edge_attr.view(-1, 2))
         # num_edges = edge_index.size(1)
-        edge_score = edge_score.view(-1)
+        edge_score = edge_score.view(-1, 1)
         return edge_score
 
 
@@ -83,12 +85,14 @@ class TopKEdgePooling(torch.nn.Module):
 
         pi = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
         score = self.gumbel_softmax(pi, batch=edge_batch, training=self.training)
-        score = f.leaky_relu(score, self.negative_slop) + self.lamb * edge_attr[:, 0]
+        score = f.relu(score)
         score = score.view(-1)
         perm = topk(score, self.ratio, edge_batch, self.min_score)
         edge_index = edge_index[:, perm]
         edge_attr = edge_attr[perm]
-
+        # Remove isolated nodes should be processed in subgraphs but not the whole concatenated graph:
+        # TODO: write a method to process in  batch-wise
+        edge_index, edge_attr, _ = remove_isolated_nodes(edge_index, edge_attr)
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
         return x, edge_index, edge_attr, batch
@@ -114,7 +118,7 @@ class TopKEdgePooling(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    graph = data_graph_transform(data_dir="../dataset", dataset="intel", dataset_name="intel.txt")
+    graph = data_graph_transform(data_dir="../dataset", dataset="krogan", dataset_name="krogan_core.txt")
     graph = graph.cuda()
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
     topk_sample.cuda()
@@ -122,8 +126,7 @@ if __name__ == "__main__":
                                                   edge_attr=graph.edge_attr.view(-1, 2),
                                                   batch=graph.node_to_subgraph, edge_batch=graph.edge_to_subgraph)
     sparse_max = Sparsemax()
-    output = sparse_max(graph.edge_attr, graph.edge_to_subgraph)
-    topk_sample.cuda()
+    output = sparse_max(graph.edge_attr[:, 0], graph.edge_to_subgraph)
 
     gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 256),
                                                   torch.nn.ReLU(),

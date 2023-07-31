@@ -198,7 +198,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
     # if os.path.exists(os.path.join("dataset", batch_path)):
     #     pyg_batch = torch.load(os.path.join("dataset", batch_path))
     #     return pyg_batch
-    pyg_graph = torch_geometric.utils.from_networkx(graph)
+    pyg_graph = torch_geometric.utils.from_networkx(graph, group_edge_attrs=all)
     # init the edge count dict: get keys from pyg_graph edge index
     edge_count = {tuple(edge.numpy()): 0 for edge in pyg_graph.edge_index.t()}
     x = torch.zeros(len(graph.nodes), 1, dtype=torch.float32)
@@ -210,15 +210,13 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
             pyg_subgraph = torch_geometric.utils.from_networkx(subgraph)
             if pyg_subgraph.num_nodes == 0:
                 continue
-            edge_attr = torch.zeros_like(pyg_subgraph.edge_index.t())
-            edge_attr[:, 0] = pyg_subgraph.edge_attr
-
+            org_attr = pyg_subgraph.edge_attr.clone().detach()
+            edge_attr = torch.zeros_like(pyg_subgraph.edge_index.t()).to(torch.float32)
             for i in range(pyg_subgraph.edge_index.t().size(0)):
                 edge = pyg_subgraph.edge_index.t()[i]
                 if tuple(edge.numpy()) in edge_count.keys():
                     edge_count[tuple(edge.numpy())] = edge_count.get(tuple(edge.numpy())) + 1
-                    edge_attr[i] = torch.tensor(
-                        (pyg_subgraph.edge_attr[i], torch.tensor(edge_count[tuple(edge.numpy())])))
+                    edge_attr[i] = torch.tensor((org_attr[i], torch.tensor(edge_count[tuple(edge.numpy())])))
             # for edge in pyg_subgraph.edge_index.t():
             #     # current problem is that the edges from pyg_subgraph may more than original graph
             #     if tuple(edge.numpy()) in edge_count.keys():
