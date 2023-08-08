@@ -16,7 +16,6 @@ from model.CountingNet import EdgeMean
 from motif_processor import QueryPreProcessing, Queryset
 from utils.graph_operator import data_graph_transform
 
-
 warnings.filterwarnings("ignore")
 INF = float("inf")
 
@@ -50,9 +49,9 @@ train_config = {
     "bp_loss_slp": "anneal_cosine$1.0$0.01",  # 0, 0.01, logistic$1.0$0.01, linear$1.0$0.01, cosine$1.0$0.01,
     # cyclical_logistic$1.0$0.01, cyclical_linear$1.0$0.01, cyclical_cosine$1.0$0.01
     # anneal_logistic$1.0$0.01, anneal_linear$1.0$0.01, anneal_cosine$1.0$0.01
-    "lr": 0.0008,
+    "lr": 0.0006,
     "weight_decay": 0.0005,
-    "weight_decay_var": 0.5,
+    "weight_decay_var": 0.1,
     "weight_decay_film": 0.0001,
     "decay_factor": 0.7,
     "decay_patience": 20,
@@ -64,10 +63,10 @@ train_config = {
     "emb_dim": 128,
     "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
 
-    "predict_net": "FilmSumPredictNet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
+    "predict_net": "CCANet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
     # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,
     # MeanMemAttnPredictNet, SumMemAttnPredictNet, MaxMemAttnPredictNet,
-    # DIAMNet
+    # DIAMNet, CCANet
     "predict_net_add_enc": False,
     "predict_net_add_degree": False,
     "predict_net_hidden_dim": 128,
@@ -101,9 +100,9 @@ train_config = {
 
     "queryset_dir": "queryset",
     "true_card_dir": "label",
-    "dataset": "intel",
+    "dataset": "krogan",
     "data_dir": "dataset",
-    "dataset_name": "intel.txt",
+    "dataset_name": "krogan_core.txt",
     "save_res_dir": "result",
     "save_model_dir": "saved_model",
     'init_g_dim': 1,
@@ -112,6 +111,7 @@ train_config = {
     "GSL": True
 
 }
+
 
 def train(model, optimizer, scheduler, data_type, data_loader, device, config, epoch, graph, logger=None, writer=None,
           bottleneck=False):
@@ -166,7 +166,7 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
         #     motif_x, motif_edge_index, motif_edge_attr = \
         #         _to_cuda(motif_x), _to_cuda(motif_edge_index), _to_cuda(motif_edge_attr)
         #     card, var = card.cuda(), var.cuda()
-        if config['predict_net'].startswith("Film"):
+        if config['predict_net'].startswith("Film") or config['predict_net'].startswith("CCA"):
             pred, pred_var, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
             # distribution, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
             # pred_var += 1e-10
@@ -185,7 +185,8 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
                 pred_var, var)
             # bp_loss = -distribution.log_prob(card).mean()
             # bp_loss = wasserstein_loss(torch.distributions.Normal(loc=card, scale=torch.sqrt(var)), distribution)
-        reg_loss = bp_loss if not config['predict_net'].startswith("Film") else bp_loss - train_config[
+        reg_loss = bp_loss if not config['predict_net'].startswith("Film") or config['predict_net'].startswith(
+            "CCA") else bp_loss - train_config[
             "weight_decay_film"] * filmreg
 
         # if isinstance(config["bp_loss_slp"], (int, float)):
@@ -291,7 +292,7 @@ def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=N
             var = var.cpu()
             evaluate_results["mean"]["count"].extend(card.view(-1).tolist())
             evaluate_results["var"]["var_t"].extend(var.view(-1).tolist())
-            if config['predict_net'].startswith("Film"):
+            if config['predict_net'].startswith("Film") or config['predict_net'].startswith("CCA"):
                 st = time.time()
                 pred, pred_var, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
                 # distribution, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
@@ -461,7 +462,8 @@ if __name__ == "__main__":
     # train_loaders, val_loaders, test_loaders = _to_dataloaders(train_sets), _to_dataloaders(val_sets), _to_dataloaders(
     #     test_sets)
     graph = data_graph_transform(train_config['data_dir'], train_config['dataset'],
-                                 train_config['dataset_name'],gsl=train_config["GSL"])  # ./dataset/krogan/graph_batch.pt"
+                                 train_config['dataset_name'],
+                                 gsl=train_config["GSL"])  # ./dataset/krogan/graph_batch.pt"
     # config['init_g_dim'] = graph.x.size(1)
     # train_config.update({'init_g_dim': graph.x.size(1)})
     # construct the model

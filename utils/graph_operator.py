@@ -10,7 +10,7 @@ import torch_geometric.utils
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import from_networkx
-
+import torch_geometric.transforms as T
 from utils.batch import Batch
 
 
@@ -255,3 +255,11 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
             pyg_batch[k] = v
     # torch.save(pyg_batch, os.path.join("dataset", batch_path))
     return pyg_batch
+
+
+def maximal_component(edge_index, edge_attr, data):
+    data.edge_index = edge_index
+    data.edge_attr = edge_attr
+    transform = T.LargestConnectedComponents()
+    data = Batch.from_data_list([transform(d) for d in data.to_data_list()])
+    return data.x, data.edge_index, data.edge_attr, data.batch

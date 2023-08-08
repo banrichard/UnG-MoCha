@@ -66,7 +66,7 @@ class EdgeMean(GraphModel):
     def forward(self, motif_x, motif_edge_index, motif_edge_attr, graph):
         pattern_emb = self.p_net(motif_x, motif_edge_index, motif_edge_attr)
         graph_output = self.g_net(graph)
-        if self.predict_net_name.startswith("Film"):
+        if self.predict_net_name.startswith("Film") or self.predict_net_name.startswith("CCA"):
             pred, var, filmreg = self.predict_net(pattern_emb, graph_output)
             # distribution, filmreg = self.predict_net(pattern_emb, graph_output)
             # filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5

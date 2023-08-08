@@ -153,6 +153,10 @@ class QuerySampler(object):
             return self.sample_cycle(4)
         elif type == "clique_4":
             return self.sample_clique(4)
+        elif type == "clique_5":
+            return self.sample_clique(5)
+        elif type == "clique_6":
+            return self.sample_clique(6)
 
     def sample_star(self, node_num):
         nodes_list = []
@@ -335,22 +339,24 @@ class QuerySampler(object):
 #     graph = pickle.load(f)
 #     # edge_list = nx.to_pandas_edgelist(graph)
 #     # edge_list.to_csv("dataset/simulation/s14linc.txt", sep=" ", header=None, index=False,float_format="%.2f")
-graph = load_data("california/california.txt")
-graph = to_LSS_format(graph, "california_lss.txt")
+graph = load_data("krogan/krogan_core.txt")
+graph = to_LSS_format(graph, "krogan_lss.txt")
 sampler = QuerySampler(graph)
 label_dict = {
-    'star_3': [15219.7297, 11357.0412],
-    'triangle_3': [1454950.4674, 2516502.6185],
-    # 'path_4': [2.0891,0.6203],
-    'star_4': [410.9022, 395.8754],
-    'tailedtriangle_4': [34456.9569, 78751.9875],
-    'cycle_4': [334447.4313, 567995.9319],
-    'clique_4': [16039.8094, 14225.2783]
+    # 'star_3': [15219.7297, 11357.0412],
+    # 'triangle_3': [1454950.4674, 2516502.6185],
+    # # 'path_4': [2.0891,0.6203],
+    # 'star_4': [410.9022, 395.8754],
+    # 'tailedtriangle_4': [34456.9569, 78751.9875],
+    # 'cycle_4': [334447.4313, 567995.9319],
+    # 'clique_4': [16039.8094, 14225.2783]
+    'clique_5': [7759.5827, 561055.6039],
+    'clique_6': [9485.6123, 2716411.3853]
 }
 for key in label_dict.keys():
     for i in range(100):
         sample = sampler.sample(key)
-        query_dir = os.path.join("BJ", "queryset", key)
+        query_dir = os.path.join("krogan", "queryset", key)
         if not os.path.exists(query_dir):
             os.mkdir(query_dir)
         with open(os.path.join(query_dir, "{}.txt".format(i)), 'w') as f1:
@@ -359,7 +365,7 @@ for key in label_dict.keys():
                 f1.write("v {} {} {}\n".format(node[0], node[1]["label"], node[1]['dvid']))
             for edge in sample.edges(data=True):
                 f1.write("e {} {} {:.2f}\n".format(edge[0], edge[1], edge[2]['prob']))
-        label_dir = os.path.join("BJ", "label", key)
+        label_dir = os.path.join("krogan", "label", key)
         if not os.path.exists(label_dir):
             os.mkdir(label_dir)
         with open(os.path.join(label_dir, "{}.txt".format(i)), 'w') as f2:

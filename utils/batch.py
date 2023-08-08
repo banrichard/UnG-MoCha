@@ -112,7 +112,7 @@ class Batch(Data):
                 ('Cannot reconstruct data list from batch because the batch '
                  'object was not created using Batch.from_data_list()'))
 
-        keys = [key for key in self.keys if key[-5:] != 'batch']
+        keys = ['x', 'edge_index', 'edge_attr']
         cumsum = {key: 0 for key in keys}
         data_list = []
         for i in range(len(self.__slices__[keys[0]]) - 1):
@@ -126,15 +126,12 @@ class Batch(Data):
                     if self[key].dtype != torch.bool:
                         data[key] = data[key] - cumsum[key]
                 else:
-                    data[key] = self[key][self.__slices__[key][i]:self.
-                    __slices__[key][i + 1]]
+                    data[key] = self[key][self.__slices__[key][i]:self.__slices__[key][i + 1]]
                 if key == 'node_to_subgraph':
                     cumsum[key] = cumsum[key] + data.num_subgraphs
                 elif key == 'subgraph_to_graph':
                     cumsum[key] = cumsum[key] + 1
                 elif key == 'original_edge_index':
-                    cumsum[key] = cumsum[key] + data.num_subgraphs
-                elif key == 'original_edge_attr':
                     cumsum[key] = cumsum[key] + data.num_subgraphs
                 else:
                     cumsum[key] = cumsum[key] + data.__inc__(key, data[key])
@@ -159,6 +156,7 @@ if __name__ == "__main__":
     edge_attr3 = torch.tensor([[0.2], [0.3], [0.4], [0.5]], dtype=torch.float)
     batch.append(Data(x=x3, edge_index=edge_index3, edge_attr=edge_attr3))
     pyg_batch = Batch.from_data_list(batch)
-    print(pyg_batch)
+    pyg_batchs = pyg_batch.to_data_list()
+    print(pyg_batchs)
     # topk_sample = TopKEdgePooling(ratio=0.5)
     # y = topk_sample(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)

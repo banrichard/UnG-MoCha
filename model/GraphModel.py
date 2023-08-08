@@ -4,7 +4,7 @@ import torch.nn as nn
 
 from model.Embedding import Embedding
 from model.MLP import MLP
-from model.PredictNet import FilmSumPredictNet, DIAMNet, MeanAttnPredictNet, MeanPredictNet
+from model.PredictNet import FilmSumPredictNet, DIAMNet, MeanAttnPredictNet, MeanPredictNet, CCANet
 from utils.utils import get_enc_len, int2onehot
 
 
@@ -239,11 +239,10 @@ class GraphModel(nn.Module):
                                   mem_len=mem_len, mem_init=mem_init,
                                   dropout=self.dropout, dropatt=self.dropatt)
 
-        elif predict_type == "MyPredictNet13":
+        elif predict_type == "CCANet":
             hidden_dim = kw.get("hidden_dim", 64)
             act_func = "relu"
-            predict_net = MyPredictNet13(pattern_dim, hidden_dim, act_func_readout=self.act_func,
-                                         act_func_count=act_func, dropout=self.dropout)
+            predict_net = CCANet(pattern_dim, graph_dim, hidden_dim)
         else:
             raise NotImplementedError("Currently, %s is not supported!" % (predict_type))
         return predict_net

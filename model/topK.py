@@ -2,6 +2,7 @@ from typing import Callable, Optional, Tuple, Union, Any
 
 import torch
 from torch import Tensor
+from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing, GINConv
 from torch_geometric.nn.pool.topk_pool import topk, filter_adj
 from torch_geometric.utils import dense_to_sparse, softmax, remove_isolated_nodes
@@ -12,6 +13,8 @@ from model.MLP import MLP, FC
 from model.sparse_softmax import Sparsemax
 from utils.graph_operator import data_graph_transform
 import torch.nn.functional as f
+
+from utils.graph_operator import maximal_component
 
 
 class EdgeScore(torch.nn.Module):
@@ -53,7 +56,7 @@ class TopKEdgePooling(torch.nn.Module):
 
     def __init__(
             self,
-            in_channels: int = 128,
+            in_channels: int = 2,
             min_score: Optional[float] = None,
             ratio: Union[int, float] = None,
             nonlinearity: Callable = torch.tanh,
@@ -69,20 +72,12 @@ class TopKEdgePooling(torch.nn.Module):
         self.negative_slop = negative_slop
         self.sparse_attention = Sparsemax()
         self.lamb = lamb
+        self.in_channels = in_channels
         self.edge_score = EdgeScore(in_channels=in_channels)
 
-    def forward(
-            self,
-            x: Tensor,
-            edge_index: Tensor,
-            edge_attr: Tensor,
-            batch: Optional[Tensor] = None,
-            edge_batch: Optional[Tensor] = None
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-
-        if batch is None:
-            batch = edge_index.new_zeros(x.size(0))
-
+    def forward(self, data: Data) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        x, edge_index, edge_attr, batch, edge_batch = data.x, data.edge_index, data.edge_attr.view(-1,
+                                                                                                   2), data.node_to_subgraph, data.edge_to_subgraph
         pi = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
         score = self.gumbel_softmax(pi, batch=edge_batch, training=self.training)
         score = f.relu(score)
@@ -91,8 +86,9 @@ class TopKEdgePooling(torch.nn.Module):
         edge_index = edge_index[:, perm]
         edge_attr = edge_attr[perm]
         # Remove isolated nodes should be processed in subgraphs but not the whole concatenated graph:
-        # TODO: write a method to process in  batch-wise
-        edge_index, edge_attr, _ = remove_isolated_nodes(edge_index, edge_attr)
+        # TODO: write a method to process in each subgraph
+        x, edge_index, edge_attr, batch = maximal_component(edge_index.detach().cpu(), edge_attr.detach().cpu(),
+                                                            data.cpu())
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
         return x, edge_index, edge_attr, batch
@@ -122,9 +118,7 @@ if __name__ == "__main__":
     graph = graph.cuda()
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
     topk_sample.cuda()
-    x, edge_index, edge_attr, batch = topk_sample(x=graph.x, edge_index=graph.edge_index,
-                                                  edge_attr=graph.edge_attr.view(-1, 2),
-                                                  batch=graph.node_to_subgraph, edge_batch=graph.edge_to_subgraph)
+    x, edge_index, edge_attr, batch = topk_sample(graph)
     sparse_max = Sparsemax()
     output = sparse_max(graph.edge_attr[:, 0], graph.edge_to_subgraph)
 
