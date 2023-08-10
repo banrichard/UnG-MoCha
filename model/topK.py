@@ -78,20 +78,29 @@ class TopKEdgePooling(torch.nn.Module):
     def forward(self, data: Data) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         x, edge_index, edge_attr, batch, edge_batch = data.x, data.edge_index, data.edge_attr.view(-1,
                                                                                                    2), data.node_to_subgraph, data.edge_to_subgraph
+        device = x.device
         pi = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
         score = self.gumbel_softmax(pi, batch=edge_batch, training=self.training)
         score = f.relu(score)
         score = score.view(-1)
         perm = topk(score, self.ratio, edge_batch, self.min_score)
+        # filter the selected nodes and edges
         edge_index = edge_index[:, perm]
         edge_attr = edge_attr[perm]
+        edge_batch = edge_batch[perm]
+        data.edge_to_subgraph = edge_batch
+        unique_nodes = torch.unique(edge_index)
+        x = x.index_select(0, unique_nodes)
+        batch = batch.index_select(0, unique_nodes)
         # Remove isolated nodes should be processed in subgraphs but not the whole concatenated graph:
         # TODO: write a method to process in each subgraph
-        x, edge_index, edge_attr, batch = maximal_component(edge_index.detach().cpu(), edge_attr.detach().cpu(),
-                                                            data.cpu())
+        x, edge_index, edge_attr, batch = maximal_component(x.detach().cpu(), edge_attr.detach().cpu(),
+                                                            edge_index.detach().cpu(), batch.detach().cpu(),
+                                                            edge_batch.detach().cpu(),
+                                                            data.num_subgraphs)
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
-        return x, edge_index, edge_attr, batch
+        return x.to(device), edge_index.to(device), edge_attr.to(device), batch.to(device)
 
     def gumbel_softmax(self, logits, temperature=0.1, batch=None, training=False):
         gumbel_noise = torch.rand_like(logits)
@@ -119,9 +128,6 @@ if __name__ == "__main__":
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
     topk_sample.cuda()
     x, edge_index, edge_attr, batch = topk_sample(graph)
-    sparse_max = Sparsemax()
-    output = sparse_max(graph.edge_attr[:, 0], graph.edge_to_subgraph)
-
     gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 256),
                                                   torch.nn.ReLU(),
                                                   torch.nn.Linear(256, 256)),

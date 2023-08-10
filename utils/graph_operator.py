@@ -9,7 +9,7 @@ import torch
 import torch_geometric.utils
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
-from torch_geometric.utils import from_networkx
+from torch_geometric.utils import from_networkx, to_networkx
 import torch_geometric.transforms as T
 from utils.batch import Batch
 
@@ -47,7 +47,7 @@ def data_graph_transform(data_dir, dataset, dataset_name, batch_path=None, gsl=T
         else:
             candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
         cnt += 1
-    batch = create_batch(graph, candidate_sets, batch_path=batch_path, edge_base=True)
+    batch = create_batch(graph, candidate_sets, edge_base=True)
     return batch
 
 
@@ -182,22 +182,13 @@ def random_walk_on_subgraph_edge(subgraph: nx.Graph, edge, walks=20, subs=5) -> 
     return subgraph_with_highest_probability
 
 
-def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_base=True):
+def create_batch(graph: nx.Graph, candidate_sets: dict, edge_base=True):
     """
     :param graph: the original graph (the node features are pre-embedded by Node2Vec)
     :param candidate_sets: the candidate subgraph(s) of each node
     :return: a Batch contains subgraph representation
     """
     # convert networkx graph into pyg style
-    # edge_attrs = list(graph.edges.data("prob"))
-    # pyg_graph = from_networkx(graph,group_edge_attrs=['prob'])
-
-    # x = torch.ones([graph.number_of_nodes(), 1])
-    # x = nx.to_numpy_array(graph,weight='prob')
-    # x = torch.from_numpy(x)
-    # if os.path.exists(os.path.join("dataset", batch_path)):
-    #     pyg_batch = torch.load(os.path.join("dataset", batch_path))
-    #     return pyg_batch
     pyg_graph = torch_geometric.utils.from_networkx(graph, group_edge_attrs=all)
     # init the edge count dict: get keys from pyg_graph edge index
     edge_count = {tuple(edge.numpy()): 0 for edge in pyg_graph.edge_index.t()}
@@ -217,10 +208,6 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
                 if tuple(edge.numpy()) in edge_count.keys():
                     edge_count[tuple(edge.numpy())] = edge_count.get(tuple(edge.numpy())) + 1
                     edge_attr[i] = torch.tensor((org_attr[i], torch.tensor(edge_count[tuple(edge.numpy())])))
-            # for edge in pyg_subgraph.edge_index.t():
-            #     # current problem is that the edges from pyg_subgraph may more than original graph
-            #     if tuple(edge.numpy()) in edge_count.keys():
-            #         edge_count[tuple(edge.numpy())] = edge_count.get(tuple(edge.numpy())) + 1
             pyg_subgraph.edge_attr = edge_attr
             pyg_subgraphs.append(pyg_subgraph)
     else:
@@ -231,9 +218,8 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
                 continue
             pyg_subgraphs.append(pyg_subgraph)
 
-    # add edge freq as the one new edge feature
-
     pyg_batch = Batch.from_data_list(pyg_subgraphs)
+
     pyg_batch.x = pyg_batch.x.to(torch.float32)
     pyg_batch.edge_attr = pyg_batch.edge_attr.to(torch.float32)
     pyg_batch.edge_index = torch.LongTensor(pyg_batch.edge_index)
@@ -250,16 +236,39 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, batch_path=None, edge_ba
     del pyg_batch.edge_batch
     pyg_batch.subgraph_to_graph = torch.zeros(pyg_batch.num_subgraphs, dtype=torch.long)
     for k, v in pyg_graph:
-        if k not in ['x', 'edge_index', 'edge_attr', 'pos', 'num_nodes', 'batch',
-                     'z', 'rd', 'node_type']:
+        if k not in ['x', 'edge_index', 'edge_attr', 'num_nodes', 'batch']:
             pyg_batch[k] = v
     # torch.save(pyg_batch, os.path.join("dataset", batch_path))
     return pyg_batch
 
 
-def maximal_component(edge_index, edge_attr, data):
-    data.edge_index = edge_index
-    data.edge_attr = edge_attr
-    transform = T.LargestConnectedComponents()
-    data = Batch.from_data_list([transform(d) for d in data.to_data_list()])
-    return data.x, data.edge_index, data.edge_attr, data.batch
+def maximal_component(x, edge_attr, edge_index, batch, edge_batch, num_subgraphs):
+    largest_node_mask = torch.zeros(1)
+    largest_edge_mask = torch.zeros((2, 1)).to(torch.long)
+    for i in range(num_subgraphs):
+        # get each subgraph
+        node_mask = batch == i
+        edge_mask = edge_batch == i
+        subgraph_x = x[node_mask]
+        subgraph_edge_idx = edge_index[:, edge_mask]
+        subgraph_edge_attr = edge_attr[edge_mask]
+        # get the largest component
+        new_subgraph = Data(x=subgraph_x, edge_index=subgraph_edge_idx, edge_attr=subgraph_edge_attr)
+        nx_graph = to_networkx(new_subgraph, to_undirected=True)
+        del new_subgraph
+        largest_component_x = torch.Tensor(list(max(nx.connected_components(nx_graph), key=len))).to(torch.int).to(
+            subgraph_edge_idx.device)
+        largest_node_mask = torch.cat([largest_node_mask, largest_component_x], dim=0)
+        largest_component = torch_geometric.utils.subgraph(largest_component_x, subgraph_edge_idx, subgraph_edge_attr)
+        # filter on subgraph and generate a new one
+        largest_edge_mask = torch.cat([largest_edge_mask, largest_component[0]], dim=1)
+    filter_mask = torch.isin(edge_index[0], largest_edge_mask[0, 1:]) & torch.isin(edge_index[1],
+                                                                                   largest_edge_mask[1, 1:])
+    edge_attr = edge_attr[filter_mask]
+    edge_index = largest_edge_mask[:, 1:]
+
+    unique_nodes = torch.unique(edge_index)
+    node_mask = torch.isin(batch, unique_nodes)
+    x = x[node_mask]
+    batch = batch[node_mask]
+    return x, edge_index, edge_attr, batch

@@ -1,7 +1,9 @@
 import torch
 import torch_geometric
 from torch_geometric.data import Data
-
+from torch_geometric.data import Batch
+from torch_geometric.data.separate import separate
+from torch_geometric.data.batch import Batch
 
 # This is a copy from torch_geometric/data/batch.py
 # which is modified to support batch assignment in subgraph level
@@ -33,7 +35,7 @@ class Batch(Data):
         keys = list(set.union(*keys))
         assert 'batch' not in keys
 
-        batch = Batch()
+        batch = Batch(data_list=data_list)
         batch.__data_class__ = data_list[0].__class__
         batch.__slices__ = {key: [0] for key in keys}
 
@@ -98,14 +100,13 @@ class Batch(Data):
 
         if torch_geometric.is_debug_enabled():
             batch.debug()
-
         return batch.contiguous()
 
     def to_data_list(self):
         r"""Reconstructs the list of :class:`torch_geometric.data.Data` objects
         from the batch object.
         The batch object must have been created via :meth:`from_data_list` in
-        order to be able reconstruct the initial objects."""
+        order to be able to reconstruct the initial objects."""
 
         if self.__slices__ is None:
             raise RuntimeError(
@@ -119,22 +120,18 @@ class Batch(Data):
             data = self.__data_class__()
             for key in keys:
                 if torch.is_tensor(self[key]):
-                    data[key] = self[key].narrow(
-                        data.__cat_dim__(key,
-                                         self[key]), self.__slices__[key][i],
-                        self.__slices__[key][i + 1] - self.__slices__[key][i])
+                    try:
+                        data[key] = self[key].narrow(
+                            data.__cat_dim__(key,
+                                             self[key]), self.__slices__[key][i],
+                            self.__slices__[key][i + 1] - self.__slices__[key][i])
+                    except RuntimeError:
+                        continue
                     if self[key].dtype != torch.bool:
                         data[key] = data[key] - cumsum[key]
                 else:
                     data[key] = self[key][self.__slices__[key][i]:self.__slices__[key][i + 1]]
-                if key == 'node_to_subgraph':
-                    cumsum[key] = cumsum[key] + data.num_subgraphs
-                elif key == 'subgraph_to_graph':
-                    cumsum[key] = cumsum[key] + 1
-                elif key == 'original_edge_index':
-                    cumsum[key] = cumsum[key] + data.num_subgraphs
-                else:
-                    cumsum[key] = cumsum[key] + data.__inc__(key, data[key])
+                cumsum[key] = cumsum[key] + data.__inc__(key, data[key])
             data_list.append(data)
 
         return data_list
@@ -156,7 +153,7 @@ if __name__ == "__main__":
     edge_attr3 = torch.tensor([[0.2], [0.3], [0.4], [0.5]], dtype=torch.float)
     batch.append(Data(x=x3, edge_index=edge_index3, edge_attr=edge_attr3))
     pyg_batch = Batch.from_data_list(batch)
-    pyg_batchs = pyg_batch.to_data_list()
-    print(pyg_batchs)
+    pyg_batches = pyg_batch.to_data_list()
+    print(pyg_batches)
     # topk_sample = TopKEdgePooling(ratio=0.5)
     # y = topk_sample(x=x, edge_index=edge_index, edge_attr=edge_attr, batch=batch)
