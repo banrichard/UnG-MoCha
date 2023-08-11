@@ -75,32 +75,30 @@ class TopKEdgePooling(torch.nn.Module):
         self.in_channels = in_channels
         self.edge_score = EdgeScore(in_channels=in_channels)
 
-    def forward(self, data: Data) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    def forward(self, data: Data) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         x, edge_index, edge_attr, batch, edge_batch = data.x, data.edge_index, data.edge_attr.view(-1,
                                                                                                    2), data.node_to_subgraph, data.edge_to_subgraph
         device = x.device
         pi = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
         score = self.gumbel_softmax(pi, batch=edge_batch, training=self.training)
-        score = f.relu(score)
         score = score.view(-1)
         perm = topk(score, self.ratio, edge_batch, self.min_score)
         # filter the selected nodes and edges
         edge_index = edge_index[:, perm]
         edge_attr = edge_attr[perm]
         edge_batch = edge_batch[perm]
-        data.edge_to_subgraph = edge_batch
-        unique_nodes = torch.unique(edge_index)
-        x = x.index_select(0, unique_nodes)
-        batch = batch.index_select(0, unique_nodes)
+        # unique_nodes = torch.unique(edge_index)
+        # x = x.index_select(0, unique_nodes)
+        # batch = batch.index_select(0, unique_nodes)
         # Remove isolated nodes should be processed in subgraphs but not the whole concatenated graph:
         # TODO: write a method to process in each subgraph
-        x, edge_index, edge_attr, batch = maximal_component(x.detach().cpu(), edge_attr.detach().cpu(),
-                                                            edge_index.detach().cpu(), batch.detach().cpu(),
-                                                            edge_batch.detach().cpu(),
-                                                            data.num_subgraphs)
+        x, edge_index, edge_attr, batch, edge_mask = maximal_component(x, edge_attr,
+                                                                       edge_index, batch,
+                                                                       edge_batch,
+                                                                       data.num_subgraphs)
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
-        return x.to(device), edge_index.to(device), edge_attr.to(device), batch.to(device)
+        return x, edge_index, edge_attr, batch, edge_mask
 
     def gumbel_softmax(self, logits, temperature=0.1, batch=None, training=False):
         gumbel_noise = torch.rand_like(logits)
@@ -124,23 +122,22 @@ class TopKEdgePooling(torch.nn.Module):
 
 if __name__ == "__main__":
     graph = data_graph_transform(data_dir="../dataset", dataset="krogan", dataset_name="krogan_core.txt")
-    graph = graph.cuda()
+    graph = graph
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
-    topk_sample.cuda()
-    x, edge_index, edge_attr, batch = topk_sample(graph)
+    x, edge_index, edge_attr, batch, edge_mask = topk_sample(graph)
+    edge_index = edge_index[:, edge_mask]
+    edge_attr = edge_attr[edge_mask]
+    edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, 128)
     gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 256),
                                                   torch.nn.ReLU(),
                                                   torch.nn.Linear(256, 256)),
                            train_eps=True)
-    gnn_for_test = gnn_for_test.cuda()
     y = gnn_for_test(x=x, edge_index=edge_index)
+    unique_nodes = torch.unique(edge_index)
+    node_mask = torch.isin(batch, unique_nodes)
+    x = x[node_mask]
+    batch = batch[node_mask]
     num_nodes = y.size(0)
-    mask = torch.zeros(num_nodes, dtype=torch.bool)
-    mask[edge_index] = 1
-
-    # Apply mask
-    out = y[mask]
-    batch = batch[mask]
-    print(out)
+    print(y)
     # edge_score = EdgeScore(in_channels=1)
     # score = edge_score(edge_attr, edge_batch)

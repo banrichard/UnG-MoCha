@@ -35,7 +35,7 @@ class Batch(Data):
         keys = list(set.union(*keys))
         assert 'batch' not in keys
 
-        batch = Batch(data_list=data_list)
+        batch = Batch()
         batch.__data_class__ = data_list[0].__class__
         batch.__slices__ = {key: [0] for key in keys}
 

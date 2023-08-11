@@ -57,7 +57,9 @@ class NestedGIN(torch.nn.Module):
             x = data.x.cuda()
         else:
             x = torch.zeros([edge_index.max() + 1, 1]).cuda()
-        x, edge_index, edge_attr, batch = self.pooling(data)
+        x, edge_index, edge_attr, batch, edge_mask = self.pooling(data)
+        edge_index = edge_index[:, edge_mask]
+        edge_attr = edge_attr[edge_mask]
         edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, self.num_e_hid)
         xs = []
         for layer in range(len(self.convs)):
@@ -72,9 +74,13 @@ class NestedGIN(torch.nn.Module):
             else:
                 xs += [x]
         x = torch.cat(xs, dim=1)
+        unique_nodes = torch.unique(edge_index)
+        node_mask = torch.isin(batch, unique_nodes)
+        x = x[node_mask]
+        batch = batch[node_mask]
         x = global_mean_pool(x, batch)
         # final graph representation
-        x = global_add_pool(x, data.subgraph_to_graph)
+        x = global_add_pool(x, torch.zeros(batch.max() + 1).to(torch.long).to(x.device))
         x = F.relu(self.lin1(x))
         x = F.dropout(x, p=0.5, training=self.training)
         x = self.lin2(x)

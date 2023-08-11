@@ -243,8 +243,9 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, edge_base=True):
 
 
 def maximal_component(x, edge_attr, edge_index, batch, edge_batch, num_subgraphs):
-    largest_node_mask = torch.zeros(1)
-    largest_edge_mask = torch.zeros((2, 1)).to(torch.long)
+    # target: only to output the mask but not directly edge index
+    largest_node_mask = torch.zeros(1).to(edge_index.device)
+    largest_edge_mask = torch.zeros((2, 1)).to(torch.long).to(edge_index.device)
     for i in range(num_subgraphs):
         # get each subgraph
         node_mask = batch == i
@@ -258,17 +259,12 @@ def maximal_component(x, edge_attr, edge_index, batch, edge_batch, num_subgraphs
         del new_subgraph
         largest_component_x = torch.Tensor(list(max(nx.connected_components(nx_graph), key=len))).to(torch.int).to(
             subgraph_edge_idx.device)
-        largest_node_mask = torch.cat([largest_node_mask, largest_component_x], dim=0)
+        largest_node_mask = torch.cat([largest_node_mask, largest_component_x], dim=0).to(subgraph_edge_idx.device)
         largest_component = torch_geometric.utils.subgraph(largest_component_x, subgraph_edge_idx, subgraph_edge_attr)
         # filter on subgraph and generate a new one
         largest_edge_mask = torch.cat([largest_edge_mask, largest_component[0]], dim=1)
-    filter_mask = torch.isin(edge_index[0], largest_edge_mask[0, 1:]) & torch.isin(edge_index[1],
-                                                                                   largest_edge_mask[1, 1:])
-    edge_attr = edge_attr[filter_mask]
-    edge_index = largest_edge_mask[:, 1:]
 
-    unique_nodes = torch.unique(edge_index)
-    node_mask = torch.isin(batch, unique_nodes)
-    x = x[node_mask]
-    batch = batch[node_mask]
-    return x, edge_index, edge_attr, batch
+    edge_mask = torch.isin(edge_index[0], largest_edge_mask[0, 1:]) & torch.isin(edge_index[1],
+                                                                                 largest_edge_mask[1, 1:])
+
+    return x, edge_index, edge_attr, batch, edge_mask
