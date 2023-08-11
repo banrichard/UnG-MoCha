@@ -266,5 +266,6 @@ def maximal_component(x, edge_attr, edge_index, batch, edge_batch, num_subgraphs
 
     edge_mask = torch.isin(edge_index[0], largest_edge_mask[0, 1:]) & torch.isin(edge_index[1],
                                                                                  largest_edge_mask[1, 1:])
-
-    return x, edge_index, edge_attr, batch, edge_mask
+    edge_index = edge_index[:,edge_mask]
+    edge_attr = edge_attr[edge_mask]
+    return x, edge_index, edge_attr, batch

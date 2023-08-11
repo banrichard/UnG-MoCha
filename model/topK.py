@@ -92,13 +92,13 @@ class TopKEdgePooling(torch.nn.Module):
         # batch = batch.index_select(0, unique_nodes)
         # Remove isolated nodes should be processed in subgraphs but not the whole concatenated graph:
         # TODO: write a method to process in each subgraph
-        x, edge_index, edge_attr, batch, edge_mask = maximal_component(x, edge_attr,
-                                                                       edge_index, batch,
-                                                                       edge_batch,
-                                                                       data.num_subgraphs)
+        x, edge_index, edge_attr, batch = maximal_component(x, edge_attr,
+                                                            edge_index, batch,
+                                                            edge_batch,
+                                                            data.num_subgraphs)
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
-        return x, edge_index, edge_attr, batch, edge_mask
+        return x, edge_index, edge_attr, batch
 
     def gumbel_softmax(self, logits, temperature=0.1, batch=None, training=False):
         gumbel_noise = torch.rand_like(logits)

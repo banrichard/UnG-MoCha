@@ -57,9 +57,7 @@ class NestedGIN(torch.nn.Module):
             x = data.x.cuda()
         else:
             x = torch.zeros([edge_index.max() + 1, 1]).cuda()
-        x, edge_index, edge_attr, batch, edge_mask = self.pooling(data)
-        edge_index = edge_index[:, edge_mask]
-        edge_attr = edge_attr[edge_mask]
+        x, edge_index, edge_attr, batch = self.pooling(data)
         edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, self.num_e_hid)
         xs = []
         for layer in range(len(self.convs)):
