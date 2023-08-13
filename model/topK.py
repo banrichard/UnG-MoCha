@@ -3,50 +3,29 @@ from typing import Callable, Optional, Tuple, Union, Any
 import torch
 from torch import Tensor
 from torch_geometric.data import Data
-from torch_geometric.nn import MessagePassing, GINConv
+from torch_geometric.nn import GINConv
 from torch_geometric.nn.pool.topk_pool import topk, filter_adj
 from torch_geometric.utils import dense_to_sparse, softmax, remove_isolated_nodes
-from torch_scatter import scatter_add
-from torch_sparse import SparseTensor
-from torch.sparse import Tensor as st
 from model.MLP import MLP, FC
 from model.sparse_softmax import Sparsemax
 from utils.graph_operator import data_graph_transform
 import torch.nn.functional as f
-
+from torch_geometric.loader import DataLoader
 from utils.graph_operator import maximal_component
+from dataset_generator import UGDataset
 
 
 class EdgeScore(torch.nn.Module):
     def __init__(self, in_channels, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.in_channels = in_channels
-        self.att = torch.nn.Parameter(torch.Tensor(1, in_channels))
         self.mlp = MLP(in_ch=in_channels, hid_ch=128, out_ch=1)
-        torch.nn.init.xavier_uniform_(self.att.data)
 
     def forward(self, edge_attr, batch):
         edge_score = self.mlp(edge_attr.view(-1, 2))
         # num_edges = edge_index.size(1)
         edge_score = edge_score.view(-1, 1)
         return edge_score
-
-
-def filter_nodes(edge_index: Tensor, x: Tensor, batch: Tensor, edge_batch: Tensor, perm: Tensor) -> tuple[
-    Tensor, Tensor]:
-    """
-    This function targets to generate the filtered nodes according to filtered edge index. Filtered edge index acts
-    as the sparse adjacency matrix.
-    """
-
-    # find the corresponding x index in each subgraph whose value is equal to mask
-    # current problem is the edge number is more than node number, difficult to generate the mask matrix
-    num_nodes = x.size(0)
-    mask = torch.zeros(num_nodes, dtype=torch.bool)
-    mask[edge_index] = 1
-    x = x[mask]
-    batch = batch[mask]
-    return x, batch
 
 
 class TopKEdgePooling(torch.nn.Module):
@@ -75,7 +54,7 @@ class TopKEdgePooling(torch.nn.Module):
         self.in_channels = in_channels
         self.edge_score = EdgeScore(in_channels=in_channels)
 
-    def forward(self, data: Data) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    def forward(self, data: Data) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         x, edge_index, edge_attr, batch, edge_batch = data.x, data.edge_index, data.edge_attr.view(-1,
                                                                                                    2), data.node_to_subgraph, data.edge_to_subgraph
         device = x.device
@@ -121,12 +100,10 @@ class TopKEdgePooling(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    graph = data_graph_transform(data_dir="../dataset", dataset="krogan", dataset_name="krogan_core.txt")
-    graph = graph
+    graph = UGDataset()
+    loader = DataLoader(graph)
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
-    x, edge_index, edge_attr, batch, edge_mask = topk_sample(graph)
-    edge_index = edge_index[:, edge_mask]
-    edge_attr = edge_attr[edge_mask]
+    x, edge_index, edge_attr, batch = topk_sample(graph)
     edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, 128)
     gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 256),
                                                   torch.nn.ReLU(),

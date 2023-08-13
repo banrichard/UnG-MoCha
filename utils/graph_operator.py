@@ -244,6 +244,7 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, edge_base=True):
 
 def maximal_component(x, edge_attr, edge_index, batch, edge_batch, num_subgraphs):
     # target: only to output the mask but not directly edge index
+    transform = T.LargestConnectedComponents()
     largest_node_mask = torch.zeros(1).to(edge_index.device)
     largest_edge_mask = torch.zeros((2, 1)).to(torch.long).to(edge_index.device)
     for i in range(num_subgraphs):
@@ -266,6 +267,6 @@ def maximal_component(x, edge_attr, edge_index, batch, edge_batch, num_subgraphs
 
     edge_mask = torch.isin(edge_index[0], largest_edge_mask[0, 1:]) & torch.isin(edge_index[1],
                                                                                  largest_edge_mask[1, 1:])
-    edge_index = edge_index[:,edge_mask]
+    edge_index = edge_index[:, edge_mask]
     edge_attr = edge_attr[edge_mask]
     return x, edge_index, edge_attr, batch

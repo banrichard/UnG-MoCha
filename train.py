@@ -76,17 +76,6 @@ train_config = {
     # mean, sum, max, attn, circular_mean, circular_sum, circular_max, circular_attn, lstm
     "predict_net_recurrent_steps": 3,
 
-    "rgin_num_bases": 8,
-    "rgin_regularizer": "bdd",  # basis, bdd
-    "rgin_graph_num_layers": 3,
-    "rgin_pattern_num_layers": 3,
-    "rgin_hidden_dim": 128,
-
-    "ppn_num_bases": 8,
-    "ppn_graph_num_layers": 3,
-    "ppn_pattern_num_layers": 3,
-    "ppn_hidden_dim": 24,
-
     "edgemean_num_bases": 8,
     "edgemean_graph_num_layers": 3,
     "edgemean_pattern_num_layers": 3,

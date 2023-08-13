@@ -340,7 +340,7 @@ class QuerySampler(object):
 #     # edge_list = nx.to_pandas_edgelist(graph)
 #     # edge_list.to_csv("dataset/simulation/s14linc.txt", sep=" ", header=None, index=False,float_format="%.2f")
 graph = load_data("krogan/krogan_core.txt")
-graph = to_LSS_format(graph, "krogan_lss.txt")
+graph = to_LSS_format(graph, "krogan.txt")
 sampler = QuerySampler(graph)
 label_dict = {
     # 'star_3': [15219.7297, 11357.0412],
@@ -350,8 +350,8 @@ label_dict = {
     # 'tailedtriangle_4': [34456.9569, 78751.9875],
     # 'cycle_4': [334447.4313, 567995.9319],
     # 'clique_4': [16039.8094, 14225.2783]
-    'clique_5': [7759.5827, 561055.6039],
-    'clique_6': [9485.6123, 2716411.3853]
+    'clique_5': [7759.5827,561055.6039],
+    'clique_6': [9485.6123,2716411.3853]
 }
 for key in label_dict.keys():
     for i in range(100):

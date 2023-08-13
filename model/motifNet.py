@@ -88,7 +88,6 @@ class NNGINConcatConv(MessagePassing):
 
         # propagate_type: (x: OptPairTensor, edge_attr: OptTensor)
         out = self.propagate(edge_index=edge_index, x=x, edge_attr=edge_attr, size=size)
-
         out = self.node_nn(out)
         # print(out.shape)
         return out

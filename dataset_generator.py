@@ -1,14 +1,20 @@
 from torch_geometric.data import InMemoryDataset, Data
+from torch_geometric.loader import DataLoader
 import pandas as pd
 import shutil, os
 import os.path as osp
 import torch
 import numpy as np
 from itertools import repeat
+import torch_geometric.transforms as T
+from torch_geometric.data.data import BaseData
 from tqdm import tqdm
+from torch_geometric.utils import from_networkx
+
+from utils.graph_operator import load_graph, k_hop_induced_subgraph_edge
 
 
-class PygGraphPropPredDataset(InMemoryDataset):
+class UGDataset(InMemoryDataset):
     def __init__(self, root="./dataset", name="krogan_core", transform=None, pre_transform=None, pre_filter=None,
                  use_edge_attr=True, filepath="krogan", train_ratio=0.8, val_ratio=0.1, test_ratio=0.1):
         self.root = root
@@ -21,6 +27,7 @@ class PygGraphPropPredDataset(InMemoryDataset):
         self.train_ratio = train_ratio
         self.val_ratio = val_ratio
         self.test_ratio = test_ratio
+        self.cnt = 0
         super().__init__(root, transform, pre_transform, pre_filter)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
@@ -30,7 +37,7 @@ class PygGraphPropPredDataset(InMemoryDataset):
 
     @property
     def processed_dir(self) -> str:
-        return osp.join(self.root, self.name)
+        return osp.join(self.root, self.filepath, self.name)
 
     @property
     def raw_file_names(self):
@@ -38,7 +45,7 @@ class PygGraphPropPredDataset(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return ['data.pt']
+        return [self.name + '.pt']
 
     def dataset_split(self):
         assert self.train_ratio + self.val_ratio <= 1.0, "Error split ratios!"
@@ -60,34 +67,34 @@ class PygGraphPropPredDataset(InMemoryDataset):
 
     def process(self):
         # Read data into huge `Data` list.
-        datalist = []
-        labels = self.raw_file_names[0]
-        querysets = self.raw_file_names[1]
-
-        def iterate_folders(folder1_path, folder2_path):
-            for (root1, dirs1, files1), (root2, dirs2, files2) in zip(os.walk(folder1_path), os.walk(folder2_path)):
-                # Iterate over files in both folders simultaneously
-                for file1, file2 in zip(files1, files2):
-                    queryset = pd.read_csv(osp.join(root1, file1), header=None, skiprows=4, delimiter=" ")
-                    edge_index = torch.from_numpy(queryset.iloc[:, 1:3].values.T)
-                    edge_attr = torch.from_numpy(queryset.iloc[:, -1].values.reshape(-1, 1))
-
-                    label = pd.read_csv(osp.join(root2, file2), header=None, delimiter=" ")
-                    mean = torch.from_numpy(label[0].values.reshape(-1, 1))
-                    var = torch.from_numpy(label[1].values.reshape(-1, 1))
-
-                    g = Data(edge_index=edge_index, edge_attr=edge_attr, mean=mean, var=var)
-                    datalist.append(g)
-                # Recurse into subfolders
-                for subfolder1, subfolder2 in zip(dirs1, dirs2):
-                    iterate_folders(os.path.join(root1, subfolder1), os.path.join(root2, subfolder2))
-
-        iterate_folders(querysets, labels)
-
-        data, slices = self.collate(datalist)
+        data_list = []
+        graph = load_graph(osp.join(self.root, self.filepath, self.name + ".txt"))
+        edge_count = {}
+        for edge in graph.edges(data=True):
+            subgraph = k_hop_induced_subgraph_edge(graph, edge)
+            pyg_subgraph = from_networkx(subgraph, group_edge_attrs=all)
+            if pyg_subgraph.num_nodes == 0:
+                continue
+            pyg_subgraph.edge_attr = pyg_subgraph.edge_attr.expand(-1, 2).clone()
+            data_list.append(pyg_subgraph)
+            for i in range(pyg_subgraph.edge_index.size(1)):
+                edge = pyg_subgraph.edge_index[:, i]
+                edge_count[tuple(edge.numpy())] = edge_count.get(tuple(edge.numpy()), 0) + 1
+            # need to update after computing the edge count
+            self.cnt += 1
+        for subgraph in data_list:
+            for j in range(subgraph.edge_index.size(1)):
+                edge = tuple(subgraph.edge_index[:, j].numpy())
+                subgraph.edge_attr[j] = torch.cat([subgraph.edge_attr[j, 1].view(-1, 1),
+                                                      torch.tensor(edge_count.get(edge)).view(-1, 1).to(
+                                                          subgraph.edge_attr.dtype)], dim=1)
+        data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
 
 
 if __name__ == "__main__":
-    dataset = torch.load("dataset/krogan_core/data.pt")
-    print(dataset)
+    dataset = UGDataset()
+    trans = T.LargestConnectedComponents()
+    dataloader = DataLoader(dataset, batch_size=dataset.len(), shuffle=False)
+    for batch in dataloader:
+        batch = trans(batch)
