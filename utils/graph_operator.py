@@ -9,7 +9,7 @@ import torch
 import torch_geometric.utils
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
-from torch_geometric.utils import from_networkx, to_networkx, unbatch, unbatch_edge_index
+from torch_geometric.utils import from_networkx, to_networkx, unbatch, unbatch_edge_index, remove_isolated_nodes
 import torch_geometric.transforms as T
 from dataset_generator import UGDataset
 from utils.batch import Batch
@@ -215,25 +215,10 @@ def cal_edge_batch(edge_index, batch):
     return edge_batch
 
 
-def maximal_component(x, edge_index, edge_attr, batch, edge_batch, num_subgraphs):
+def maximal_component(x, edge_index, edge_attr, batch):
     # target: only to output the mask but not directly edge index
     # traverse the batch to update
-    transform = T.LargestConnectedComponents()
-    x_list = unbatch(x, batch=batch)
-    edge_indices = unbatch_edge_index(edge_index, batch=batch)
-    edge_attrs = unbatch(edge_attr, batch=edge_batch)
-    del x
-    del edge_index
-    del edge_attr
-    data_list = []
-    for i in range(num_subgraphs):
-        d = transform(Data(x=x_list[i], edge_index=edge_indices[i], edge_attr=edge_attrs[i]))
-        data_list.append(d)
-    new_batch = Batch.from_data_list(data_list)
-    del data_list
-    x = new_batch.x.to(torch.float32)
-    edge_index = new_batch.edge_index.to(torch.long)
-    edge_attr = new_batch.edge_attr.to(torch.float32)
-    batch = new_batch.batch
-    del new_batch
+    edge_index,edge_attr,mask = remove_isolated_nodes(edge_index,edge_attr)
+    x = x[mask]
+    batch = batch[mask]
     return x, edge_index, edge_attr, batch

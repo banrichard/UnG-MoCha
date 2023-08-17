@@ -558,26 +558,3 @@ if __name__ == "__main__":
     logger.info("train time: {:.3f}, train time per epoch :{:.3f}, test time: {:.3f}, all time: {:.3f}"
                 .format(total_train_time, total_train_time / train_config["epochs"], total_test_time,
                         total_train_time + total_dev_time + total_test_time))
-
-# model.load_state_dict(torch.load(os.path.join(save_model_dir, 'best_epoch.pt')))
-#    # print(model)
-#    for loader_idx, data_loader in enumerate(test_loaders):
-#        mean_reg_loss, mean_bp_loss, evaluate_results, _time = evaluate(model=model, data_type="test",
-#                                                                        data_loader=data_loader,
-#                                                                        config=train_config,
-#                                                                        graph=graph,
-#                                                                        logger=logger, writer=writer)
-#        total_test_time += _time
-#        if mean_reg_loss <= best_reg_losses['test']:
-#            best_reg_losses['test'] = mean_reg_loss
-#            # best_reg_epochs['test'] =
-#            logger.info(
-#                "data_type: {:<5s}\tbest mean loss: {:.3f}".format("val", mean_reg_loss))
-#            with open(os.path.join(save_model_dir, '%s_%s_%d.json' % (train_config['motif_net'], "best_test", loader_idx)), "w") as f:
-#                json.dump(evaluate_results, f)
-#
-#        logger.info(
-#            "data_type: {:<5s}\tbest mean loss: {:.3f} ".format("test", mean_reg_loss))
-#    logger.info("train time: {:.3f}, train time per epoch :{:.3f}, test time: {:.3f}, all time: {:.3f}"
-#                .format(total_train_time, total_train_time / train_config["epochs"], total_test_time,
-#                        total_train_time + total_dev_time + total_test_time))

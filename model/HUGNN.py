@@ -57,8 +57,7 @@ class NestedGNN(torch.nn.Module):
             return SAGEConv
 
     def forward(self, data):
-        data = data.cuda()
-        edge_index, edge_attr, batch, edge_batch = data.edge_index, data.edge_attr, data.batch, data.edge_batch
+        edge_index, edge_attr, batch, edge_batch = data.edge_index.cuda(), data.edge_attr.cuda(), data.batch.cuda(), data.edge_batch.cuda()
         # edge_attr = edge_attr.view(-1, 1).expand(-1, self.num_e_hid)
         if 'x' in data:
             x = data.x.cuda()
@@ -66,10 +65,6 @@ class NestedGNN(torch.nn.Module):
             x = torch.zeros([edge_index.max() + 1, 1]).cuda()
         if self.gsl:
             x, edge_index, edge_attr, batch = self.pooling(data)
-            x = x.cuda()
-            edge_index = edge_index.cuda()
-            edge_attr = edge_attr.cuda()
-            batch = batch.cuda()
         edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, self.num_e_hid)
         xs = []
         for layer in range(len(self.convs)):
@@ -89,5 +84,5 @@ class NestedGNN(torch.nn.Module):
         x = global_add_pool(x, torch.zeros(batch.max() + 1).to(torch.long).to(x.device))
         x = F.relu(self.lin1(x))
         x = F.dropout(x, p=0.5, training=self.training)
-        x = self.lin2(x)
+        x = F.relu(self.lin2(x))
         return x

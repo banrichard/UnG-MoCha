@@ -69,11 +69,10 @@ class TopKEdgePooling(torch.nn.Module):
         edge_batch = edge_batch[perm]
         # Remove isolated nodes should be processed in subgraphs but not the whole concatenated graph:
         # TODO: write a method to process in each subgraph
-        x, edge_index, edge_attr, batch = maximal_component(x.cpu(), edge_index.cpu(), edge_attr.cpu(), batch.cpu(),
-                                                            edge_batch.cpu(), edge_batch.max() + 1)
+        x, edge_index, edge_attr, batch = maximal_component(x,edge_index,edge_attr, batch)
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
-        return x, edge_index, edge_attr, batch
+        return x.to(torch.float32), edge_index, edge_attr.to(torch.float32), batch
 
     def gumbel_softmax(self, logits, temperature=0.1, batch=None, training=False):
         gumbel_noise = torch.rand_like(logits)
@@ -98,10 +97,11 @@ class TopKEdgePooling(torch.nn.Module):
 if __name__ == "__main__":
     graph = UGDataset(root="../dataset")
     edge_batch = graph.edge_batch
-    loader = DataLoader(graph, batch_size=128)
+    loader = DataLoader(graph, batch_size=graph.len())
     data = next(iter(loader))
+    data.edge_batch = edge_batch
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
-    x, edge_index, edge_attr, batch = topk_sample(data, edge_batch)
+    x, edge_index, edge_attr, batch = topk_sample(data)
     edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, 128)
     gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 128),
                                                   torch.nn.ReLU(),
