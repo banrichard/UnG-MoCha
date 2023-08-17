@@ -11,7 +11,7 @@ from torch_geometric.data.data import BaseData
 from tqdm import tqdm
 from torch_geometric.utils import from_networkx
 
-from utils.graph_operator import load_graph, k_hop_induced_subgraph_edge
+from utils.utils import load_graph, k_hop_induced_subgraph_edge
 
 
 class UGDataset(InMemoryDataset):
@@ -28,8 +28,9 @@ class UGDataset(InMemoryDataset):
         self.val_ratio = val_ratio
         self.test_ratio = test_ratio
         self.cnt = 0
+        self.edge_batch = torch.zeros(1).to(torch.int64)
         super().__init__(root, transform, pre_transform, pre_filter)
-        self.data, self.slices = torch.load(self.processed_paths[0])
+        self.data, self.slices, self.edge_batch = torch.load(self.processed_paths[0])
 
     @property
     def raw_dir(self) -> str:
@@ -75,26 +76,37 @@ class UGDataset(InMemoryDataset):
             pyg_subgraph = from_networkx(subgraph, group_edge_attrs=all)
             if pyg_subgraph.num_nodes == 0:
                 continue
-            pyg_subgraph.edge_attr = pyg_subgraph.edge_attr.expand(-1, 2).clone()
+            pyg_subgraph.edge_attr = pyg_subgraph.edge_attr.expand(-1, 2).clone().to(torch.float32)
             data_list.append(pyg_subgraph)
             for i in range(pyg_subgraph.edge_index.size(1)):
                 edge = pyg_subgraph.edge_index[:, i]
                 edge_count[tuple(edge.numpy())] = edge_count.get(tuple(edge.numpy()), 0) + 1
             # need to update after computing the edge count
-            self.cnt += 1
         for subgraph in data_list:
             for j in range(subgraph.edge_index.size(1)):
                 edge = tuple(subgraph.edge_index[:, j].numpy())
                 subgraph.edge_attr[j] = torch.cat([subgraph.edge_attr[j, 1].view(-1, 1),
-                                                      torch.tensor(edge_count.get(edge)).view(-1, 1).to(
-                                                          subgraph.edge_attr.dtype)], dim=1)
+                                                   torch.tensor(edge_count.get(edge)).view(-1, 1).to(
+                                                       subgraph.edge_attr.dtype)], dim=1)
+            self.edge_batch = torch.cat(
+                [self.edge_batch, torch.Tensor([self.cnt] * subgraph.edge_index.size(1)).to(self.edge_batch.dtype)],
+                dim=0)
+            self.cnt += 1
+        self.edge_batch = self.edge_batch[1:]
         data, slices = self.collate(data_list)
-        torch.save((data, slices), self.processed_paths[0])
+        torch.save((data, slices, self.edge_batch), self.processed_paths[0])
 
+    def post_transform(self, data_list, edge_batch):
+        data, slices = self.collate(data_list)
+        self.edge_batch = edge_batch
+        transform = T.LargestConnectedComponents()
+        data = transform(data)
+        return data
 
 if __name__ == "__main__":
     dataset = UGDataset()
     trans = T.LargestConnectedComponents()
     dataloader = DataLoader(dataset, batch_size=dataset.len(), shuffle=False)
     for batch in dataloader:
+        b = batch.batch
         batch = trans(batch)

@@ -315,14 +315,14 @@ class QuerySampler(object):
         return sample
 
     def node_reorder(self, nodes_list, edges_list):
-        idx_dict = {}
-        node_cnt = 0
-        for v in nodes_list:
-            idx_dict[v] = node_cnt
-            node_cnt += 1
-        nodes_list = [(idx_dict[v], {"label": -1, "dvid": -1})
+        # idx_dict = {}
+        # node_cnt = 0
+        # for v in nodes_list:
+        #     idx_dict[v] = node_cnt
+        #     node_cnt += 1
+        nodes_list = [(v, {"label": -1, "dvid": -1})
                       for v in nodes_list]
-        edges_list = [(idx_dict[u], idx_dict[v], {"prob": self.graph.edges[u, v]["prob"]})
+        edges_list = [(u, v, {"prob": self.graph.edges[u, v]["prob"]})
                       for (u, v) in edges_list]
         sample = nx.Graph()
         sample.add_nodes_from(nodes_list)
@@ -345,18 +345,18 @@ sampler = QuerySampler(graph)
 label_dict = {
     # 'star_3': [15219.7297, 11357.0412],
     # 'triangle_3': [1454950.4674, 2516502.6185],
-    # # 'path_4': [2.0891,0.6203],
+    # 'path_4': [2.0891,0.6203],
     # 'star_4': [410.9022, 395.8754],
     # 'tailedtriangle_4': [34456.9569, 78751.9875],
     # 'cycle_4': [334447.4313, 567995.9319],
-    # 'clique_4': [16039.8094, 14225.2783]
-    'clique_5': [7759.5827,561055.6039],
-    'clique_6': [9485.6123,2716411.3853]
+    'clique_4': [16039.8094, 14225.2783]#,
+    # 'clique_5': [7759.5827,561055.6039],
+    # 'clique_6': [9485.6123,2716411.3853]
 }
 for key in label_dict.keys():
-    for i in range(100):
+    for i in range(50):
         sample = sampler.sample(key)
-        query_dir = os.path.join("krogan", "queryset", key)
+        query_dir = os.path.join("krogan_ns", "queryset", key)
         if not os.path.exists(query_dir):
             os.mkdir(query_dir)
         with open(os.path.join(query_dir, "{}.txt".format(i)), 'w') as f1:
@@ -365,9 +365,9 @@ for key in label_dict.keys():
                 f1.write("v {} {} {}\n".format(node[0], node[1]["label"], node[1]['dvid']))
             for edge in sample.edges(data=True):
                 f1.write("e {} {} {:.2f}\n".format(edge[0], edge[1], edge[2]['prob']))
-        label_dir = os.path.join("krogan", "label", key)
-        if not os.path.exists(label_dir):
-            os.mkdir(label_dir)
-        with open(os.path.join(label_dir, "{}.txt".format(i)), 'w') as f2:
-            f2.write(str(label_dict[key][0]) + " " + str(label_dict[key][1]))
+        # label_dir = os.path.join("krogan", "label", key)
+        # if not os.path.exists(label_dir):
+        #     os.mkdir(label_dir)
+        # with open(os.path.join(label_dir, "{}.txt".format(i)), 'w') as f2:
+        #     f2.write(str(label_dict[key][0]) + " " + str(label_dict[key][1]))
 # prepare_data_pack(g, ["602020"], "s1", "dataset/simulation")

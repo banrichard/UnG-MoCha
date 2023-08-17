@@ -2,7 +2,7 @@ from typing import Callable, Optional, Tuple, Union, Any
 
 import torch
 from torch import Tensor
-from torch_geometric.data import Data
+from torch_geometric.data import Data, InMemoryDataset
 from torch_geometric.nn import GINConv
 from torch_geometric.nn.pool.topk_pool import topk, filter_adj
 from torch_geometric.utils import dense_to_sparse, softmax, remove_isolated_nodes
@@ -49,32 +49,28 @@ class TopKEdgePooling(torch.nn.Module):
         self.nonlinearity = nonlinearity
         self.epsilon = epsilon
         self.negative_slop = negative_slop
-        self.sparse_attention = Sparsemax()
         self.lamb = lamb
         self.in_channels = in_channels
         self.edge_score = EdgeScore(in_channels=in_channels)
 
-    def forward(self, data: Data) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    def forward(self, data: Data) -> tuple[
+        Tensor, Tensor, Tensor, Tensor]:
         x, edge_index, edge_attr, batch, edge_batch = data.x, data.edge_index, data.edge_attr.view(-1,
-                                                                                                   2), data.node_to_subgraph, data.edge_to_subgraph
+                                                                                                   2), data.batch, data.edge_batch
         device = x.device
         pi = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
+        # get score on every subgraph
         score = self.gumbel_softmax(pi, batch=edge_batch, training=self.training)
         score = score.view(-1)
         perm = topk(score, self.ratio, edge_batch, self.min_score)
-        # filter the selected nodes and edges
+        # filter the selected nodes and edges, we already have the mask matrix
         edge_index = edge_index[:, perm]
         edge_attr = edge_attr[perm]
         edge_batch = edge_batch[perm]
-        # unique_nodes = torch.unique(edge_index)
-        # x = x.index_select(0, unique_nodes)
-        # batch = batch.index_select(0, unique_nodes)
         # Remove isolated nodes should be processed in subgraphs but not the whole concatenated graph:
         # TODO: write a method to process in each subgraph
-        x, edge_index, edge_attr, batch = maximal_component(x, edge_attr,
-                                                            edge_index, batch,
-                                                            edge_batch,
-                                                            data.num_subgraphs)
+        x, edge_index, edge_attr, batch = maximal_component(x.cpu(), edge_index.cpu(), edge_attr.cpu(), batch.cpu(),
+                                                            edge_batch.cpu(), edge_batch.max() + 1)
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
         return x, edge_index, edge_attr, batch
@@ -100,20 +96,18 @@ class TopKEdgePooling(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    graph = UGDataset()
-    loader = DataLoader(graph)
+    graph = UGDataset(root="../dataset")
+    edge_batch = graph.edge_batch
+    loader = DataLoader(graph, batch_size=128)
+    data = next(iter(loader))
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
-    x, edge_index, edge_attr, batch = topk_sample(graph)
+    x, edge_index, edge_attr, batch = topk_sample(data, edge_batch)
     edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, 128)
-    gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 256),
+    gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 128),
                                                   torch.nn.ReLU(),
-                                                  torch.nn.Linear(256, 256)),
+                                                  torch.nn.Linear(128, 64)),
                            train_eps=True)
     y = gnn_for_test(x=x, edge_index=edge_index)
-    unique_nodes = torch.unique(edge_index)
-    node_mask = torch.isin(batch, unique_nodes)
-    x = x[node_mask]
-    batch = batch[node_mask]
     num_nodes = y.size(0)
     print(y)
     # edge_score = EdgeScore(in_channels=1)

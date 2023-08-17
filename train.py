@@ -62,6 +62,8 @@ train_config = {
     "graph_net": "GIN",
     "emb_dim": 128,
     "activation_function": "relu",  # sigmoid, softmax, tanh, relu, leaky_relu, prelu, gelu
+    "motif_hidden_dim": 128,
+    "motif_num_layers": 3,
 
     "predict_net": "CCANet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
     # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,

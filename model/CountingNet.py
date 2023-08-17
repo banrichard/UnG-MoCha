@@ -1,5 +1,5 @@
 from model.GraphModel import GraphModel
-from model.HUGNN import NestedGIN
+from model.HUGNN import NestedGNN
 from model.motifNet import MotifGNN
 
 
@@ -16,12 +16,12 @@ class EdgeMean(GraphModel):
         self.g_net, g_dim = self.create_graph_net(
             hidden_dim=config["num_g_hid"],
             num_layers=config["graph_num_layers"], num_e_hid=128,
-            dropout=self.dropout, model_type=config['graph_net'])
+            dropout=self.dropout, model_type=config['graph_net'], gsl=config["GSL"])
 
         self.p_net, p_dim = self.create_pattern_net(
-            name="pattern", input_dim=p_emb_dim, hidden_dim=config["ppn_hidden_dim"],
+            name="pattern", input_dim=p_emb_dim, hidden_dim=config["motif_hidden_dim"],
             num_edge_feat=1,
-            num_layers=config["ppn_pattern_num_layers"],
+            num_layers=config["motif_num_layers"],
             dropout=self.dropout, model_type=config['motif_net'])
         # create predict layers
 
@@ -43,9 +43,10 @@ class EdgeMean(GraphModel):
         e_hidden_dim = kwargs.get("num_e_hid", 128)
         dropout = kwargs.get("dropout", 0.2)
         model_type = kwargs.get("model_type", "GINE")
+        gsl = kwargs.get("gsl", "True")
         out_dim = kwargs.get("out_dim", 64)
-        net = NestedGIN(num_layers=num_layers, input_dim=input_dim, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim,
-                        model_type=model_type, out_dim=out_dim, dropout=dropout)
+        net = NestedGNN(num_layers=num_layers, input_dim=input_dim, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim,
+                        model_type=model_type, out_dim=out_dim, dropout=dropout,gsl=gsl)
         return net, out_dim
 
     def create_pattern_net(self, input_dim, **kwargs):

@@ -442,4 +442,40 @@ def neighbor_aug(edge_index, edge_attr, num_nodes):
 
     return edge_index, edge_attr
 
+def load_graph(filepath, emb=None) -> nx.Graph:
+    nx_graph = nx.Graph()
+    edges = []
+    graph_data = pd.read_csv(filepath, header=None, skiprows=1, delimiter=" ")
+    for i in range(len(graph_data)):
+        edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'edge_attr': graph_data.iloc[i, 2]}))
+    nx_graph.add_edges_from(edges)
+    if emb is not None:
+        node_fea = np.loadtxt(emb, delimiter=" ")[:, 1:]
+    else:
+        node_fea = np.zeros((nx_graph.number_of_nodes(), 128))
+    for i in range(nx_graph.number_of_nodes()):
+        nx_graph.add_node(i, x=node_fea[i])
 
+    return nx_graph
+
+
+def k_hop_induced_subgraph_edge(graph, edge, k=1) -> nx.Graph:
+    node_list = []
+    edge_list = []
+    node_u = edge[0]
+    node_v = edge[1]
+    node_list.append(node_u)
+    node_list.append(node_v)
+    for neighbor in graph.neighbors(node_u):
+        node_list.append(neighbor)
+        edge_list.append((node_u, neighbor))
+    for neighbor in graph.neighbors(node_v):
+        node_list.append(neighbor)
+        edge_list.append((node_v, neighbor))
+    node_list = list(set(node_list))
+    edge_list = [(u, v, {"edge_attr": graph.edges[u, v]["edge_attr"]})
+                 for (u, v) in edge_list]
+    subgraph = nx.subgraph(graph, node_list).copy()
+    remove_edge_list = [edge for edge in subgraph.edges(data=True) if edge not in edge_list]
+    subgraph.remove_edges_from(remove_edge_list)
+    return subgraph

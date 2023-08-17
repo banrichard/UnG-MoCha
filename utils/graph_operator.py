@@ -1,7 +1,7 @@
 import os
 import queue
 import random
-
+import gc
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -9,9 +9,11 @@ import torch
 import torch_geometric.utils
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
-from torch_geometric.utils import from_networkx, to_networkx
+from torch_geometric.utils import from_networkx, to_networkx, unbatch, unbatch_edge_index
 import torch_geometric.transforms as T
+from dataset_generator import UGDataset
 from utils.batch import Batch
+from utils.utils import load_graph, k_hop_induced_subgraph_edge
 
 
 # from dataloader import DataLoader
@@ -33,6 +35,15 @@ def node_reorder(query, nodes_list, edges_list):
 
 
 def data_graph_transform(data_dir, dataset, dataset_name, batch_path=None, gsl=True):
+    if gsl:
+        dataset = UGDataset(root=data_dir, name=dataset_name.removesuffix(".txt"), filepath=dataset)
+        edge_batch = dataset.edge_batch
+        loader = DataLoader(dataset, batch_size=dataset.len())
+        batch = next(iter(loader))
+        batch.x = batch.x.to(torch.float32)
+        batch.edge_attr = batch.edge_attr.to(torch.float32)
+        batch.edge_batch = edge_batch
+        return batch
     graph = load_graph(os.path.join(data_dir, dataset, dataset_name),
                        emb=batch_path)
     candidate_sets = {}
@@ -40,54 +51,13 @@ def data_graph_transform(data_dir, dataset, dataset_name, batch_path=None, gsl=T
     #     subgraph = k_hop_induced_subgraph(graph, node)
     #     candidate_sets[node] = random_walk_on_subgraph(subgraph, node)
     cnt = 0
+
     for edge in graph.edges(data=True):
         subgraph = k_hop_induced_subgraph_edge(graph, edge)
-        if gsl:
-            candidate_sets[cnt] = subgraph
-        else:
-            candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
+        candidate_sets[cnt] = random_walk_on_subgraph_edge(subgraph, edge)
         cnt += 1
     batch = create_batch(graph, candidate_sets, edge_base=True)
     return batch
-
-
-def load_graph(filepath, emb=None) -> nx.Graph:
-    nx_graph = nx.Graph()
-    edges = []
-    graph_data = pd.read_csv(filepath, header=None, skiprows=1, delimiter=" ")
-    for i in range(len(graph_data)):
-        edges.append((graph_data.iloc[i, 0], graph_data.iloc[i, 1], {'edge_attr': graph_data.iloc[i, 2]}))
-    nx_graph.add_edges_from(edges)
-    if emb is not None:
-        node_fea = np.loadtxt(emb, delimiter=" ")[:, 1:]
-    else:
-        node_fea = np.zeros((nx_graph.number_of_nodes(), 128))
-    for i in range(nx_graph.number_of_nodes()):
-        nx_graph.add_node(i, x=node_fea[i])
-
-    return nx_graph
-
-
-def k_hop_induced_subgraph_edge(graph, edge, k=1) -> nx.Graph:
-    node_list = []
-    edge_list = []
-    node_u = edge[0]
-    node_v = edge[1]
-    node_list.append(node_u)
-    node_list.append(node_v)
-    for neighbor in graph.neighbors(node_u):
-        node_list.append(neighbor)
-        edge_list.append((node_u, neighbor))
-    for neighbor in graph.neighbors(node_v):
-        node_list.append(neighbor)
-        edge_list.append((node_v, neighbor))
-    node_list = list(set(node_list))
-    edge_list = [(u, v, {"edge_attr": graph.edges[u, v]["edge_attr"]})
-                 for (u, v) in edge_list]
-    subgraph = nx.subgraph(graph, node_list).copy()
-    remove_edge_list = [edge for edge in subgraph.edges(data=True) if edge not in edge_list]
-    subgraph.remove_edges_from(remove_edge_list)
-    return subgraph
 
 
 def k_hop_induced_subgraph(graph, src, k=1):
@@ -230,10 +200,6 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, edge_base=True):
     pyg_batch.original_x = pyg_graph.x
     pyg_batch.original_edge_index = pyg_graph.edge_index
     pyg_batch.original_edge_attr = pyg_graph.edge_attr
-    pyg_batch.node_to_subgraph = pyg_batch.batch
-    pyg_batch.edge_to_subgraph = pyg_batch.edge_batch
-    del pyg_batch.batch
-    del pyg_batch.edge_batch
     pyg_batch.subgraph_to_graph = torch.zeros(pyg_batch.num_subgraphs, dtype=torch.long)
     for k, v in pyg_graph:
         if k not in ['x', 'edge_index', 'edge_attr', 'num_nodes', 'batch']:
@@ -242,31 +208,32 @@ def create_batch(graph: nx.Graph, candidate_sets: dict, edge_base=True):
     return pyg_batch
 
 
-def maximal_component(x, edge_attr, edge_index, batch, edge_batch, num_subgraphs):
-    # target: only to output the mask but not directly edge index
-    transform = T.LargestConnectedComponents()
-    largest_node_mask = torch.zeros(1).to(edge_index.device)
-    largest_edge_mask = torch.zeros((2, 1)).to(torch.long).to(edge_index.device)
-    for i in range(num_subgraphs):
-        # get each subgraph
-        node_mask = batch == i
-        edge_mask = edge_batch == i
-        subgraph_x = x[node_mask]
-        subgraph_edge_idx = edge_index[:, edge_mask]
-        subgraph_edge_attr = edge_attr[edge_mask]
-        # get the largest component
-        new_subgraph = Data(x=subgraph_x, edge_index=subgraph_edge_idx, edge_attr=subgraph_edge_attr)
-        nx_graph = to_networkx(new_subgraph, to_undirected=True)
-        del new_subgraph
-        largest_component_x = torch.Tensor(list(max(nx.connected_components(nx_graph), key=len))).to(torch.int).to(
-            subgraph_edge_idx.device)
-        largest_node_mask = torch.cat([largest_node_mask, largest_component_x], dim=0).to(subgraph_edge_idx.device)
-        largest_component = torch_geometric.utils.subgraph(largest_component_x, subgraph_edge_idx, subgraph_edge_attr)
-        # filter on subgraph and generate a new one
-        largest_edge_mask = torch.cat([largest_edge_mask, largest_component[0]], dim=1)
+def cal_edge_batch(edge_index, batch):
+    edge_batch_len = edge_index.size(1)
+    edge_batch = torch.zeros_like(edge_batch_len)
 
-    edge_mask = torch.isin(edge_index[0], largest_edge_mask[0, 1:]) & torch.isin(edge_index[1],
-                                                                                 largest_edge_mask[1, 1:])
-    edge_index = edge_index[:, edge_mask]
-    edge_attr = edge_attr[edge_mask]
+    return edge_batch
+
+
+def maximal_component(x, edge_index, edge_attr, batch, edge_batch, num_subgraphs):
+    # target: only to output the mask but not directly edge index
+    # traverse the batch to update
+    transform = T.LargestConnectedComponents()
+    x_list = unbatch(x, batch=batch)
+    edge_indices = unbatch_edge_index(edge_index, batch=batch)
+    edge_attrs = unbatch(edge_attr, batch=edge_batch)
+    del x
+    del edge_index
+    del edge_attr
+    data_list = []
+    for i in range(num_subgraphs):
+        d = transform(Data(x=x_list[i], edge_index=edge_indices[i], edge_attr=edge_attrs[i]))
+        data_list.append(d)
+    new_batch = Batch.from_data_list(data_list)
+    del data_list
+    x = new_batch.x.to(torch.float32)
+    edge_index = new_batch.edge_index.to(torch.long)
+    edge_attr = new_batch.edge_attr.to(torch.float32)
+    batch = new_batch.batch
+    del new_batch
     return x, edge_index, edge_attr, batch

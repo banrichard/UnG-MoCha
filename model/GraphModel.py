@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from model.Embedding import Embedding
+from model.UGNN import Embedding
 from model.MLP import MLP
 from model.PredictNet import FilmSumPredictNet, DIAMNet, MeanAttnPredictNet, MeanPredictNet, CCANet
 from utils.utils import get_enc_len, int2onehot
