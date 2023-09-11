@@ -218,7 +218,7 @@ def cal_edge_batch(edge_index, batch):
 def maximal_component(x, edge_index, edge_attr, batch):
     # target: only to output the mask but not directly edge index
     # traverse the batch to update
-    edge_index,edge_attr,mask = remove_isolated_nodes(edge_index,edge_attr)
+    edge_index, edge_attr, mask = remove_isolated_nodes(edge_index, edge_attr)
     x = x[mask]
     batch = batch[mask]
     return x, edge_index, edge_attr, batch

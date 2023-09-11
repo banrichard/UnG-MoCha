@@ -27,9 +27,15 @@ class NestedGNN(torch.nn.Module):
         self.pooling = TopKEdgePooling(ratio=None, min_score=0.3)
         for l in range(self.num_layers):
             hidden_input_dim = self.input_dim if l == 0 else self.num_hid
+            hid_e_dim = 1 if l == 0 else self.num_e_hid
             hidden_output_dim = self.num_hid
-            if self.model_type == "GIN" or self.model_type == "GINE" or self.model_type == "GCN" or self.model_type == "GAT" or self.model_type == "GraphSage":
+            if self.model_type == "GIN" or self.model_type == "GCN" or self.model_type == "GAT" or self.model_type == "GraphSage":
                 self.convs.append(cov_layer(hidden_input_dim, hidden_output_dim))
+            if self.model_type == "GINE":
+                self.convs.append(GINEConv(nn=nn.Sequential(
+                    nn.Linear(hidden_input_dim, hidden_output_dim), nn.ReLU(),
+                    nn.Linear(hidden_output_dim, hidden_output_dim)), edge_dim=hid_e_dim,
+                    train_eps=True))
         self.lin1 = nn.Linear(self.num_hid * self.num_layers, self.num_hid)
         self.lin2 = nn.Linear(self.num_hid, self.out_dim)
 
@@ -45,10 +51,6 @@ class NestedGNN(torch.nn.Module):
         if model_type == "GIN":
             return lambda in_ch, hid_ch: GINConv(nn=nn.Sequential(
                 nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)), train_eps=True)
-        elif model_type == "GINE":
-            return lambda in_ch, hid_ch: GINEConv(nn=nn.Sequential(
-                nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)), edge_dim=self.num_e_hid,
-                train_eps=True)
         elif model_type == "GCN":
             return GCNConv
         elif model_type == "GAT":
@@ -65,7 +67,7 @@ class NestedGNN(torch.nn.Module):
             x = torch.zeros([edge_index.max() + 1, 1]).cuda()
         if self.gsl:
             x, edge_index, edge_attr, batch = self.pooling(data)
-        edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, self.num_e_hid)
+        edge_attr = edge_attr[:, 0].view(-1, 1)
         xs = []
         for layer in range(len(self.convs)):
             if self.model_type == "GIN" or self.model_type == "GCN" or self.model_type == "GraphSage":

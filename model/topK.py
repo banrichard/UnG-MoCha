@@ -55,8 +55,14 @@ class TopKEdgePooling(torch.nn.Module):
 
     def forward(self, data: Data) -> tuple[
         Tensor, Tensor, Tensor, Tensor]:
-        x, edge_index, edge_attr, batch, edge_batch = data.x, data.edge_index, data.edge_attr.view(-1,
-                                                                                                   2), data.batch, data.edge_batch
+        if torch.cuda.is_available():
+            x, edge_index, edge_attr, batch, edge_batch = data.x.cuda(), data.edge_index.cuda(), data.edge_attr.view(-1,
+                                                                                                                     2).cuda(), \
+                data.batch.cuda(), \
+                data.edge_batch.cuda()
+        else:
+            x, edge_index, edge_attr, batch, edge_batch = data.x, data.edge_index, data.edge_attr.view(-1,
+                                                                                                       2), data.batch, data.edge_batch
         device = x.device
         pi = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
         # get score on every subgraph
@@ -69,10 +75,10 @@ class TopKEdgePooling(torch.nn.Module):
         edge_batch = edge_batch[perm]
         # Remove isolated nodes should be processed in subgraphs but not the whole concatenated graph:
         # TODO: write a method to process in each subgraph
-        x, edge_index, edge_attr, batch = maximal_component(x,edge_index,edge_attr, batch)
+        x, edge_index, edge_attr, batch = maximal_component(x, edge_index, edge_attr, batch)
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
-        return x.to(torch.float32), edge_index, edge_attr.to(torch.float32), batch
+        return x, edge_index, edge_attr, batch
 
     def gumbel_softmax(self, logits, temperature=0.1, batch=None, training=False):
         gumbel_noise = torch.rand_like(logits)
@@ -102,7 +108,7 @@ if __name__ == "__main__":
     data.edge_batch = edge_batch
     topk_sample = TopKEdgePooling(ratio=0.5, in_channels=2)
     x, edge_index, edge_attr, batch = topk_sample(data)
-    edge_attr = edge_attr[:, 0].view(-1, 1).expand(-1, 128)
+    edge_attr = edge_attr[:, 0].view(-1, 1)
     gnn_for_test = GINConv(nn=torch.nn.Sequential(torch.nn.Linear(128, 128),
                                                   torch.nn.ReLU(),
                                                   torch.nn.Linear(128, 64)),

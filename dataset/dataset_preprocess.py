@@ -305,7 +305,7 @@ class QuerySampler(object):
         sample = self.node_reorder(nodes_list, edge_list)
         # nodes_list = []
         # edges_list = []
-        # for v in range(0, node_num):
+        # for vin range(0, node_num):
         #     nodes_list.append((v, {"label": -1, "dvid": -1}))
         #     for u in range(0, v):
         #         edges_list.append((u, v, {"prob": self.graph.edges[u, v]["prob"]}))
@@ -315,14 +315,14 @@ class QuerySampler(object):
         return sample
 
     def node_reorder(self, nodes_list, edges_list):
-        # idx_dict = {}
-        # node_cnt = 0
-        # for v in nodes_list:
-        #     idx_dict[v] = node_cnt
-        #     node_cnt += 1
-        nodes_list = [(v, {"label": -1, "dvid": -1})
+        idx_dict = {}
+        node_cnt = 0
+        for v in nodes_list:
+            idx_dict[v] = node_cnt
+            node_cnt += 1
+        nodes_list = [(idx_dict[v], {"label": -1, "dvid": -1})
                       for v in nodes_list]
-        edges_list = [(u, v, {"prob": self.graph.edges[u, v]["prob"]})
+        edges_list = [(idx_dict[u], idx_dict[v], {"prob": self.graph.edges[u, v]["prob"]})
                       for (u, v) in edges_list]
         sample = nx.Graph()
         sample.add_nodes_from(nodes_list)
@@ -343,31 +343,31 @@ graph = load_data("krogan/krogan_core.txt")
 graph = to_LSS_format(graph, "krogan.txt")
 sampler = QuerySampler(graph)
 label_dict = {
-    # 'star_3': [15219.7297, 11357.0412],
-    # 'triangle_3': [1454950.4674, 2516502.6185],
-    # 'path_4': [2.0891,0.6203],
-    # 'star_4': [410.9022, 395.8754],
-    # 'tailedtriangle_4': [34456.9569, 78751.9875],
-    # 'cycle_4': [334447.4313, 567995.9319],
-    'clique_4': [16039.8094, 14225.2783]#,
-    # 'clique_5': [7759.5827,561055.6039],
-    # 'clique_6': [9485.6123,2716411.3853]
+    # 'star_3': [189.195,892.7614],
+    # 'triangle_3': [1480.4263,18047.797],
+    # 'path_4': [49.1533 ,387.6763]
+    # 'star_4': [503.4912,15544.2638]
+    # 'tailedtriangle_4': [2957.2921,317676.3815],
+    # 'cycle_4': [3613.9587,561663.3236],
+    # 'clique_4': [10117.7296,2709.0683],
+    # 'clique_5': [7757.5298, 572602.3856],
+    'clique_6': [9423.2052,2707402.7495]
 }
 for key in label_dict.keys():
-    for i in range(50):
-        sample = sampler.sample(key)
-        query_dir = os.path.join("krogan_ns", "queryset", key)
-        if not os.path.exists(query_dir):
-            os.mkdir(query_dir)
-        with open(os.path.join(query_dir, "{}.txt".format(i)), 'w') as f1:
-            f1.write("t # {}\n".format(i))
-            for node in sample.nodes(data=True):
-                f1.write("v {} {} {}\n".format(node[0], node[1]["label"], node[1]['dvid']))
-            for edge in sample.edges(data=True):
-                f1.write("e {} {} {:.2f}\n".format(edge[0], edge[1], edge[2]['prob']))
-        # label_dir = os.path.join("krogan", "label", key)
-        # if not os.path.exists(label_dir):
-        #     os.mkdir(label_dir)
-        # with open(os.path.join(label_dir, "{}.txt".format(i)), 'w') as f2:
-        #     f2.write(str(label_dict[key][0]) + " " + str(label_dict[key][1]))
+    for i in range(100):
+        # sample = sampler.sample(key)
+        # query_dir = os.path.join("intel", "queryset", key)
+        # if not os.path.exists(query_dir):
+        #     os.mkdir(query_dir)
+        # with open(os.path.join(query_dir, "{}.txt".format(i)), 'w') as f1:
+        #     f1.write("t # {}\n".format(i))
+        #     for node in sample.nodes(data=True):
+        #         f1.write("v {} {} {}\n".format(node[0], node[1]["label"], node[1]['dvid']))
+        #     for edge in sample.edges(data=True):
+        #         f1.write("e {} {} {:.2f}\n".format(edge[0], edge[1], edge[2]['prob']))
+        label_dir = os.path.join("krogan", "label", key)
+        if not os.path.exists(label_dir):
+            os.mkdir(label_dir)
+        with open(os.path.join(label_dir, "{}.txt".format(i)), 'w') as f2:
+            f2.write(str(label_dict[key][0]) + " " + str(label_dict[key][1]))
 # prepare_data_pack(g, ["602020"], "s1", "dataset/simulation")

@@ -14,13 +14,13 @@ from utils.graph_operator import load_graph
 
 
 class QueryPreProcessing(object):
-    def __init__(self, queryset_dir: str, true_card_dir: str, dataset: str):
+    def __init__(self, queryset_dir: str, true_card_dir: str, dataset: str, data_dir = "dataset"):
         """
 		load the query graphs, true counts, vars
 		"""
         self.queryset = queryset_dir
         self.dataset = dataset
-        self.data_dir = "dataset"
+        self.data_dir = data_dir
         self.queryset_load_path = os.path.join(self.data_dir, self.dataset, self.queryset)
         self.true_card_dir = true_card_dir
         self.true_card_load_path = os.path.join(self.data_dir, self.dataset, self.true_card_dir)
@@ -52,8 +52,6 @@ class QueryPreProcessing(object):
                 self.all_queries.append((query, true_card, true_var))
                 self.num_queries += 1
                 # save the decomposed query
-                query_save_path = os.path.splitext(query_load_path)[0] + ".pickle"
-                self.save_decomposed_query(query, true_card, query_save_path)
             # print("save decomposed query: {}".format(query_save_path))
         # print("average label density: {}".format(avg_label_den / self.num_queries))
 

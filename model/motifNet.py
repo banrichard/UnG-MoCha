@@ -11,6 +11,8 @@ import torch.nn.functional as F
 from torch_geometric.nn.conv import MessagePassing, GATConv, GraphConv, SAGEConv, GINConv, GINEConv
 from torch_geometric.nn.inits import reset, uniform, zeros
 
+from motif_processor import QueryPreProcessing, Queryset
+
 
 class NNGINConv(MessagePassing):
     """
@@ -102,11 +104,8 @@ class NNGINConcatConv(MessagePassing):
 
 
 class MotifGNN(nn.Module):
-    def __init__(self, num_layers, num_g_hid, num_e_hid, out_g_ch, model_type, dropout, num_node_feat=1,
-                 num_edge_feat=1, inter_hid=64):
+    def __init__(self, num_layers, num_g_hid, num_e_hid, out_g_ch, model_type, dropout, inter_hid=64):
         super(MotifGNN, self).__init__()
-        self.num_node_feat = num_node_feat
-        self.num_edge_feat = num_edge_feat
         self.num_layers = num_layers
         self.num_hid = num_g_hid
         self.num_e_hid = num_e_hid
@@ -119,9 +118,9 @@ class MotifGNN(nn.Module):
         cov_layer = self.build_cov_layer(self.model_type)
 
         for l in range(self.num_layers):
-            hidden_input_dim = self.num_node_feat if l == 0 else self.num_hid
+            hidden_input_dim = 1 if l == 0 else self.num_hid
             hidden_output_dim = self.num_out if l == self.num_layers - 1 else self.num_hid
-
+            e_in_ch = 1
             if self.model_type == "GIN" or self.model_type == "GINE" or self.model_type == "GAT" \
                     or self.model_type == "SAGE" or self.model_type == "GCN" \
                     or self.model_type == "DNA" or self.model_type == "Graph":
@@ -129,7 +128,7 @@ class MotifGNN(nn.Module):
             elif self.model_type == "FA":
                 self.convs.append(cov_layer(hidden_input_dim, normalize=False))
             elif self.model_type == "NN" or self.model_type == "NNGIN" or self.model_type == "NNGINConcat":
-                self.convs.append(cov_layer(hidden_input_dim, hidden_output_dim, self.num_e_hid))
+                self.convs.append(cov_layer(hidden_input_dim, hidden_output_dim, e_in_ch, self.num_e_hid))
             else:
                 print("Unsupported model type!")
         self.reset_parameters()
@@ -148,11 +147,11 @@ class MotifGNN(nn.Module):
                                                                            nn.Linear(e_hid_ch, in_ch * hid_ch)))
         elif model_type == "NNGIN":
             return lambda in_ch, hid_ch, e_hid_ch: NNGINConv(
-                edge_nn=nn.Sequential(nn.Linear(self.num_edge_feat, e_hid_ch), nn.ReLU(), nn.Linear(e_hid_ch, in_ch)),
+                edge_nn=nn.Sequential(nn.Linear(in_ch, e_hid_ch), nn.ReLU(), nn.Linear(e_hid_ch, in_ch)),
                 node_nn=nn.Sequential(nn.Linear(in_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)))
         elif model_type == "NNGINConcat":
-            return lambda in_ch, hid_ch, e_hid_ch: NNGINConcatConv(
-                edge_nn=nn.Sequential(nn.Linear(self.num_edge_feat, e_hid_ch), nn.ReLU(),
+            return lambda in_ch, hid_ch, e_in_ch, e_hid_ch: NNGINConcatConv(
+                edge_nn=nn.Sequential(nn.Linear(e_in_ch, e_hid_ch), nn.ReLU(),
                                       nn.Linear(e_hid_ch, e_hid_ch)),
                 node_nn=nn.Sequential(nn.Linear(in_ch + e_hid_ch, hid_ch), nn.ReLU(), nn.Linear(hid_ch, hid_ch)))
         elif model_type == "GAT":
@@ -169,7 +168,7 @@ class MotifGNN(nn.Module):
     def reset_parameters(self):
         torch.nn.init.xavier_uniform_(self.agg.weight)
 
-    def forward(self, x, edge_index, edge_attr=None,):
+    def forward(self, x, edge_index, edge_attr=None):
         x, edge_index, edge_attr = x.squeeze(0), edge_index.squeeze(0), edge_attr.squeeze(0)
         x = x.cuda(0)
         edge_index = edge_index.cuda(0)
@@ -197,3 +196,23 @@ class MotifGNN(nn.Module):
         x = torch.unsqueeze(torch.sum(x, dim=0), dim=0)  # agg
         x = F.relu(self.agg(x))  # relu(Q*agg(x))
         return x
+
+
+if __name__ == "__main__":
+    QD = QueryPreProcessing(queryset_dir="queryset", true_card_dir="label",
+                            dataset="krogan", data_dir="../dataset")
+    # decompose the query
+    QD.decomose_queries()
+    all_subsets = QD.all_queries
+
+    QS = Queryset(dataset_name="krogan_core.txt", data_dir="../dataset",
+                  dataset="krogan", all_queries=all_subsets)
+
+    train_sets, val_sets, test_sets = QS.train_sets, QS.val_sets, QS.test_sets
+    # train_datasets = _to_datasets(train_sets)
+    # val_datasets, test_datasets, = _to_datasets(val_sets), _to_datasets(test_sets)
+    train_loaders, val_loaders, test_loaders = QS.train_loaders, QS.val_loaders, QS.test_loaders
+    motifGNN = MotifGNN(num_layers=3, num_g_hid=64, num_e_hid=64, out_g_ch=64, model_type="NNGINConcat", dropout=0.2)
+    for i, batch in enumerate(train_loaders):
+        motif_x, motif_edge_index, motif_edge_attr, card, var = batch
+        y = motifGNN(x=motif_x, edge_index=motif_edge_index, edge_attr=motif_edge_attr)

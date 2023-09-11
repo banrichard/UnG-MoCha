@@ -20,18 +20,9 @@ class EdgeMean(GraphModel):
 
         self.p_net, p_dim = self.create_pattern_net(
             name="pattern", input_dim=p_emb_dim, hidden_dim=config["motif_hidden_dim"],
-            num_edge_feat=1,
             num_layers=config["motif_num_layers"],
             dropout=self.dropout, model_type=config['motif_net'])
-        # create predict layers
-
-        if self.add_enc:
-            p_enc_dim, g_enc_dim, p_e_enc_dim, g_e_enc_dim = self.get_enc_dim()
-            p_dim += p_enc_dim * 2 + p_e_enc_dim
-            g_dim += g_enc_dim * 2 + g_e_enc_dim
-        if self.add_degree:
-            p_dim += 2
-            g_dim += 2
+        # create predict layer
         self.predict_net = self.create_predict_net(config["predict_net"],
                                                    pattern_dim=p_dim, graph_dim=g_dim,
                                                    hidden_dim=config["predict_net_hidden_dim"])
@@ -46,7 +37,7 @@ class EdgeMean(GraphModel):
         gsl = kwargs.get("gsl", "True")
         out_dim = kwargs.get("out_dim", 64)
         net = NestedGNN(num_layers=num_layers, input_dim=input_dim, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim,
-                        model_type=model_type, out_dim=out_dim, dropout=dropout,gsl=gsl)
+                        model_type=model_type, out_dim=out_dim, dropout=dropout, gsl=gsl)
         return net, out_dim
 
     def create_pattern_net(self, input_dim, **kwargs):
@@ -57,11 +48,8 @@ class EdgeMean(GraphModel):
         dropout = kwargs.get("dropout", 0.2)
         model_type = kwargs.get("model_type", "NNGINConcat")
         output_dim = kwargs.get("out_g_ch", 64)
-        num_node_feat = kwargs.get("num_node_feat", 1)
-        num_edge_feat = kwargs.get("num_edge_feat", 1)
         net = MotifGNN(num_layers=num_layers, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim, dropout=dropout,
-                       model_type=model_type, out_g_ch=output_dim, num_edge_feat=num_edge_feat,
-                       num_node_feat=num_node_feat)
+                       model_type=model_type, out_g_ch=output_dim)
         return net, output_dim
 
     def forward(self, motif_x, motif_edge_index, motif_edge_attr, graph):
