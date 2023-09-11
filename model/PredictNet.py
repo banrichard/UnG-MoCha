@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.MLP import MLP
+from model.MLP import MLP, FC
 from utils.utils import batch_convert_len_to_mask, gather_indices_by_lens
 
 
@@ -675,3 +675,33 @@ class CCANet(torch.nn.Module):
         var = F.relu(var)
         cca_reg = loss_inv + self.lam * (loss_dec1 + loss_dec2)
         return mean, var, cca_reg
+
+def WassersteinNet(torch.nn.Module):
+    def __init__(self, pattern_dim, graph_dim, hidden_dim,hidden_dim2=128):
+        super(WassersteinNet,self).__init__()
+        self.pattern_dim = pattern_dim
+        self.graph_dim = graph_dim
+        self.hidden_dim = hidden_dim
+        self.linear_layers = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim2),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Linear(hidden_dim2, hidden_dim2),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Linear(hidden_dim2, 1)
+        )
+        self.fc1 = FC(in_ch=pattern_dim+graph_dim,out_ch=hidden_dim)
+        self.fc_mean = FC(in_ch=hidden_dim,out_ch=1)
+        self.fc_var = FC(in_ch=hidden_dim,out_ch=1)
+    def forward(graph,motif):
+        y = F.relu(self.fc1(torch.cat([graph,motif],dim=1)))
+        mean = F.relu(self.fc_mean(y))
+        var = F.relu(self.fc_var(y))
+        graph_emb = self.linear_layers(graph)
+        motif_emb = self.linear_layers(motif)
+        anchor_graph = graph_emb.view(-1).argsort(descending=True)[:graph_emb.size(0)].clone()
+        anchor_motif = motif_emb.view(-1).argsort(descending=False)[:motif_emb.size(0)].clone()
+        graph_anchored = graph[anchor_graph, :].clone().detach()
+        motif_anchored = motif[anchor_motif, :].clone().detach()
+
+        wd_loss = -torch.mean(self.linear_layers(graph_anchored)) + torch.mean(self.linear_layers(motif_anchored))
+        return mean,var,wd_loss
