@@ -1,18 +1,18 @@
-from typing import Callable, Optional, Tuple, Union, Any
+from typing import Callable, Optional, Union
 
 import torch
 from torch import Tensor
-from torch_geometric.data import Data, InMemoryDataset
-from torch_geometric.nn import GINConv
-from torch_geometric.nn.pool.topk_pool import topk, filter_adj
-from torch_geometric.utils import dense_to_sparse, softmax, remove_isolated_nodes
-from model.MLP import MLP, FC
-from model.sparse_softmax import Sparsemax
-from utils.graph_operator import data_graph_transform
-import torch.nn.functional as f
+from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
-from utils.graph_operator import maximal_component
+from torch_geometric.nn import GINConv
+from torch_geometric.nn.pool.topk_pool import topk
+from torch_geometric.utils import softmax
+from torch_geometric.utils import to_networkx
+
 from dataset_generator import UGDataset
+from model.MLP import MLP
+from utils.graph_operator import maximal_component
+from utils.utils import visualization
 
 
 class EdgeScore(torch.nn.Module):
@@ -41,7 +41,8 @@ class TopKEdgePooling(torch.nn.Module):
             nonlinearity: Callable = torch.tanh,
             epsilon=1e-6,
             negative_slop=0.2,
-            lamb=0.1
+            lamb=0.1,
+            visualize_only=False
     ):
         super().__init__()
         self.min_score = min_score
@@ -52,6 +53,7 @@ class TopKEdgePooling(torch.nn.Module):
         self.lamb = lamb
         self.in_channels = in_channels
         self.edge_score = EdgeScore(in_channels=in_channels)
+        self.visualize_only = visualize_only
 
     def forward(self, data: Data) -> tuple[
         Tensor, Tensor, Tensor, Tensor]:
@@ -64,11 +66,11 @@ class TopKEdgePooling(torch.nn.Module):
             x, edge_index, edge_attr, batch, edge_batch = data.x, data.edge_index, data.edge_attr.view(-1,
                                                                                                        2), data.batch, data.edge_batch
         device = x.device
-        pi = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
+        score = self.edge_score(edge_attr=edge_attr, batch=edge_batch)
         # get score on every subgraph
-        score = self.gumbel_softmax(pi, batch=edge_batch, training=self.training)
+        score = softmax(score, edge_batch)
         score = score.view(-1)
-        perm = topk(score, self.ratio, edge_batch, self.min_score)
+        perm = topk(x=score, ratio=self.ratio, batch=edge_batch, min_score=self.min_score)
         # filter the selected nodes and edges, we already have the mask matrix
         edge_index = edge_index[:, perm]
         edge_attr = edge_attr[perm]
@@ -78,6 +80,15 @@ class TopKEdgePooling(torch.nn.Module):
         x, edge_index, edge_attr, batch = maximal_component(x, edge_index, edge_attr, batch)
         # update node feature
         # x, batch = filter_nodes(edge_index=edge_index, x=x, batch=batch, edge_batch=edge_batch, perm=perm)
+
+        if self.visualize_only:
+            tmp_g = to_networkx(
+                Data(x=x[batch == 0], edge_index=edge_index[:, edge_batch == 0],
+                     edge_attr=edge_attr[edge_batch == 0, 0].cpu().numpy()), to_undirected=True,
+                remove_self_loops=True, edge_attrs=['edge_attr'])
+
+            visualization(tmp_g, "gsl")
+            exit(0)
         return x, edge_index, edge_attr, batch
 
     def gumbel_softmax(self, logits, temperature=0.1, batch=None, training=False):

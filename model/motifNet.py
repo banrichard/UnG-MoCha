@@ -1,23 +1,18 @@
+from typing import Union, Callable
+
 import torch
-from typing import Union, Tuple, Callable
-
 import torch.nn as nn
-from torch_geometric.nn import GCNConv, NNConv
-from torch_geometric.typing import OptTensor, OptPairTensor, Adj, Size
-
-from torch import Tensor
-from torch.nn import Parameter
 import torch.nn.functional as F
+from torch import Tensor
+from torch_geometric.nn import GCNConv, NNConv
 from torch_geometric.nn.conv import MessagePassing, GATConv, GraphConv, SAGEConv, GINConv, GINEConv
-from torch_geometric.nn.inits import reset, uniform, zeros
+from torch_geometric.nn.inits import reset
+from torch_geometric.typing import OptTensor, OptPairTensor, Adj, Size
 
 from motif_processor import QueryPreProcessing, Queryset
 
 
 class NNGINConv(MessagePassing):
-    """
-    Add the node embedding with edge embedding
-    """
 
     def __init__(self, edge_nn: Callable, node_nn: Callable,
                  eps: float = 0., train_eps: bool = False, aggr: str = 'add', **kwargs):
@@ -61,10 +56,6 @@ class NNGINConv(MessagePassing):
 
 
 class NNGINConcatConv(MessagePassing):
-    """
-    Concatenate the node embedding with edge embedding
-    no self loop
-    """
 
     def __init__(self, edge_nn: Callable, node_nn: Callable,
                  eps: float = 0., train_eps: bool = False, aggr: str = 'add', **kwargs):
@@ -197,22 +188,3 @@ class MotifGNN(nn.Module):
         x = F.relu(self.agg(x))  # relu(Q*agg(x))
         return x
 
-
-if __name__ == "__main__":
-    QD = QueryPreProcessing(queryset_dir="queryset", true_card_dir="label",
-                            dataset="krogan", data_dir="../dataset")
-    # decompose the query
-    QD.decomose_queries()
-    all_subsets = QD.all_queries
-
-    QS = Queryset(dataset_name="krogan_core.txt", data_dir="../dataset",
-                  dataset="krogan", all_queries=all_subsets)
-
-    train_sets, val_sets, test_sets = QS.train_sets, QS.val_sets, QS.test_sets
-    # train_datasets = _to_datasets(train_sets)
-    # val_datasets, test_datasets, = _to_datasets(val_sets), _to_datasets(test_sets)
-    train_loaders, val_loaders, test_loaders = QS.train_loaders, QS.val_loaders, QS.test_loaders
-    motifGNN = MotifGNN(num_layers=3, num_g_hid=64, num_e_hid=64, out_g_ch=64, model_type="NNGINConcat", dropout=0.2)
-    for i, batch in enumerate(train_loaders):
-        motif_x, motif_edge_index, motif_edge_attr, card, var = batch
-        y = motifGNN(x=motif_x, edge_index=motif_edge_index, edge_attr=motif_edge_attr)

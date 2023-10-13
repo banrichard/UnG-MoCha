@@ -13,7 +13,8 @@ from torch_geometric.utils import from_networkx, to_networkx, unbatch, unbatch_e
 import torch_geometric.transforms as T
 from dataset_generator import UGDataset
 from utils.batch import Batch
-from utils.utils import load_graph, k_hop_induced_subgraph_edge
+from utils.utils import load_graph, k_hop_induced_subgraph_edge, visualization
+import matplotlib.pyplot as plt
 
 
 # from dataloader import DataLoader
@@ -93,7 +94,7 @@ def candidate_filter(candidate_set):
         if cur_prob > prob:
             final_candidate = candidate
             prob = cur_prob
-    return final_candidate
+    return final_candidate.copy()
 
 
 def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=20, subs=5):
@@ -111,6 +112,7 @@ def random_walk_on_subgraph(subgraph: nx.Graph, node, walks=20, subs=5):
             node_list.append(next_node)
         node_list = set(node_list)
         tmp_graph = subgraph.subgraph(list(node_list)).copy()
+
         remove_edge_list = []
         for (u, v) in tmp_graph.edges():
             if tmp_graph.edges[u, v]['edge_attr'] < random.random():
@@ -149,6 +151,7 @@ def random_walk_on_subgraph_edge(subgraph: nx.Graph, edge, walks=20, subs=5) -> 
         tmp_graph.remove_nodes_from(remove_node_list)
         candidate_set.append(tmp_graph)
     subgraph_with_highest_probability = candidate_filter(candidate_set)
+    visualization(subgraph_with_highest_probability, "random_walk")
     return subgraph_with_highest_probability
 
 

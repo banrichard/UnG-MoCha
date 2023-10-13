@@ -1,11 +1,11 @@
 from model.GraphModel import GraphModel
-from model.HUGNN import NestedGNN
+from model.HUGNN import HUGNN
 from model.motifNet import MotifGNN
 
 
-class EdgeMean(GraphModel):
+class Mocha(GraphModel):
     def __init__(self, config, training=True):
-        super(EdgeMean, self).__init__(config)
+        super(Mocha, self).__init__(config)
 
         # self.ignore_norm = config["rgcn_ignore_norm"]
         self.predict_net_name = config['predict_net']
@@ -16,7 +16,7 @@ class EdgeMean(GraphModel):
         self.g_net, g_dim = self.create_graph_net(
             hidden_dim=config["num_g_hid"],
             num_layers=config["graph_num_layers"], num_e_hid=128,
-            dropout=self.dropout, model_type=config['graph_net'], gsl=config["GSL"])
+            dropout=self.dropout, model_type=config['graph_net'], gsl=config["GSL"], visualize_only=config['test_only'])
 
         self.p_net, p_dim = self.create_pattern_net(
             name="pattern", input_dim=p_emb_dim, hidden_dim=config["motif_hidden_dim"],
@@ -36,8 +36,9 @@ class EdgeMean(GraphModel):
         model_type = kwargs.get("model_type", "GINE")
         gsl = kwargs.get("gsl", "True")
         out_dim = kwargs.get("out_dim", 64)
-        net = NestedGNN(num_layers=num_layers, input_dim=input_dim, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim,
-                        model_type=model_type, out_dim=out_dim, dropout=dropout, gsl=gsl)
+        visualize_only = kwargs.get("visualize_only", False)
+        net = HUGNN(num_layers=num_layers, input_dim=input_dim, num_g_hid=hidden_dim, num_e_hid=e_hidden_dim,
+                    model_type=model_type, out_dim=out_dim, dropout=dropout, gsl=gsl, visualize_only=visualize_only)
         return net, out_dim
 
     def create_pattern_net(self, input_dim, **kwargs):
@@ -55,7 +56,8 @@ class EdgeMean(GraphModel):
     def forward(self, motif_x, motif_edge_index, motif_edge_attr, graph):
         pattern_emb = self.p_net(motif_x, motif_edge_index, motif_edge_attr)
         graph_output = self.g_net(graph)
-        if self.predict_net_name.startswith("Film") or self.predict_net_name.startswith("CCA"):
+        if self.predict_net_name.startswith("Film") or self.predict_net_name.startswith(
+                "CCA") or self.predict_net_name.startswith("Wasserstein"):
             pred, var, filmreg = self.predict_net(pattern_emb, graph_output)
             # distribution, filmreg = self.predict_net(pattern_emb, graph_output)
             # filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5

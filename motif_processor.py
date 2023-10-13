@@ -4,12 +4,11 @@ import pickle
 import random
 
 import networkx as nx
-import numpy as np
+
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch_geometric.data import Data
 
-# from torch_geometric.data import Dataset, DataLoader
 from utils.graph_operator import load_graph
 
 

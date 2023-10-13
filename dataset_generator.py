@@ -1,14 +1,9 @@
-from torch_geometric.data import InMemoryDataset, Data
-from torch_geometric.loader import DataLoader
-import pandas as pd
-import shutil, os
 import os.path as osp
+
 import torch
-import numpy as np
-from itertools import repeat
 import torch_geometric.transforms as T
-from torch_geometric.data.data import BaseData
-from tqdm import tqdm
+from torch_geometric.data import InMemoryDataset
+from torch_geometric.loader import DataLoader
 from torch_geometric.utils import from_networkx
 
 from utils.utils import load_graph, k_hop_induced_subgraph_edge
@@ -102,6 +97,7 @@ class UGDataset(InMemoryDataset):
         transform = T.LargestConnectedComponents()
         data = transform(data)
         return data
+
 
 if __name__ == "__main__":
     dataset = UGDataset()

@@ -5,14 +5,11 @@ from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, GINEConv, gl
 from model.topK import TopKEdgePooling
 
 
-class NestedGNN(torch.nn.Module):
-    """
-    Hierarchical GNN to embed the data graph
-    """
+class HUGNN(torch.nn.Module):
 
     def __init__(self, num_layers, input_dim=128, num_g_hid=128, num_e_hid=128, out_dim=64, model_type="GIN",
-                 dropout=0.2, gsl=True):
-        super(NestedGNN, self).__init__()
+                 dropout=0.2, gsl=True,visualize_only=False):
+        super(HUGNN, self).__init__()
         self.num_layers = num_layers
         self.num_hid = num_g_hid
         self.num_e_hid = num_e_hid
@@ -21,10 +18,10 @@ class NestedGNN(torch.nn.Module):
         self.out_dim = out_dim
         self.dropout = dropout
         self.gsl = gsl
-        # self.mlp_in_ch = self.num_expert * self.out_g_ch if self.pool_type == "att" else self.out_g_ch
+        self.visualize_only = visualize_only
         self.convs = nn.ModuleList()
         cov_layer = self.build_conv_layers(model_type)
-        self.pooling = TopKEdgePooling(ratio=None, min_score=0.3)
+        self.pooling = TopKEdgePooling(ratio=0.5, min_score=None, visualize_only=self.visualize_only)
         for l in range(self.num_layers):
             hidden_input_dim = self.input_dim if l == 0 else self.num_hid
             hid_e_dim = 1 if l == 0 else self.num_e_hid
@@ -60,7 +57,6 @@ class NestedGNN(torch.nn.Module):
 
     def forward(self, data):
         edge_index, edge_attr, batch, edge_batch = data.edge_index.cuda(), data.edge_attr.cuda(), data.batch.cuda(), data.edge_batch.cuda()
-        # edge_attr = edge_attr.view(-1, 1).expand(-1, self.num_e_hid)
         if 'x' in data:
             x = data.x.cuda()
         else:
@@ -81,7 +77,7 @@ class NestedGNN(torch.nn.Module):
             else:
                 xs += [x]
         x = torch.cat(xs, dim=1)
-        x = global_mean_pool(x, batch)
+        x = global_add_pool(x, batch)
         # final graph representation
         x = global_add_pool(x, torch.zeros(batch.max() + 1).to(torch.long).to(x.device))
         x = F.relu(self.lin1(x))

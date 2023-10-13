@@ -22,6 +22,7 @@ from torch_sparse import spspmm, coalesce
 from tqdm import tqdm
 
 from .batch import Batch
+import matplotlib.pyplot as plt
 
 
 def nodes_to_subgraphs(data):
@@ -442,6 +443,7 @@ def neighbor_aug(edge_index, edge_attr, num_nodes):
 
     return edge_index, edge_attr
 
+
 def load_graph(filepath, emb=None) -> nx.Graph:
     nx_graph = nx.Graph()
     edges = []
@@ -478,4 +480,34 @@ def k_hop_induced_subgraph_edge(graph, edge, k=1) -> nx.Graph:
     subgraph = nx.subgraph(graph, node_list).copy()
     remove_edge_list = [edge for edge in subgraph.edges(data=True) if edge not in edge_list]
     subgraph.remove_edges_from(remove_edge_list)
+    visualization(subgraph, "original")
     return subgraph
+
+
+def visualization(graph: nx.Graph, name):
+    from matplotlib import font_manager
+    font_manager.fontManager.addfont("./LinLibertine_R.ttf")
+    plt.rcParams.update({
+        'figure.figsize': (5, 5),
+        'font.family': "Linux Libertine",
+        'font.size': 16
+    })
+    options = {
+        "node_color": "#0079FF",
+        "node_size": 150,
+        "edge_cmap": plt.cm.Blues,
+        "with_labels": False,
+        "font_size": 16,
+        "width": 0.5
+    }
+    if name == "gsl":
+        pos = nx.spring_layout(graph)
+    else:
+        pos = nx.kamada_kawai_layout(graph)
+    nx.draw(graph, pos=pos, **options)
+    edge_labels = nx.get_edge_attributes(graph, "edge_attr")
+    nx.draw_networkx_edge_labels(graph, pos=pos, edge_labels=edge_labels, font_size=16, font_family="Linux Libertine")
+    plt.savefig(name + ".pdf", bbox_inches='tight')
+    nx.set_node_attributes(graph,0,"x")
+    nx.write_gexf(graph, name + ".gexf")
+    plt.show()

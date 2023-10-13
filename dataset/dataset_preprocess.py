@@ -1,23 +1,13 @@
+import os
+import pickle
+import queue
 import random
 
-import numpy as np
-import numpy.random
-import pandas as pd
-import sys
 import networkx as nx
-import pickle
-import matplotlib.pyplot as plt
-import queue
-import os
-from networkx.algorithms import chordal
+import numpy as np
 
 
 def load_data(file):
-    # raw_data_np = np.loadtxt(file, skiprows=1)
-    # print(raw_data_np)
-    # num_node,num_edge = raw_data.iloc[0]
-    # nodes = raw_data_np[:, :-1]
-    # features = raw_data_np[:, -1]
     g = nx.Graph()
 
     with open(file, 'r') as f:
@@ -30,13 +20,6 @@ def load_data(file):
 
 
 def split_data(data: str, strategy: str):
-    """
-    Randomly select the node index to split the dataset into training,validation and testing set according to the strategy
-
-    :param data:
-    :param strategy:
-    :return:
-    """
     data_array = np.genfromtxt("dataset/simulation/" + data + ".txt")
     data_size = np.max(data_array) + 1
     training_size = int(int(strategy[0:2]) / 100 * data_size)
@@ -59,24 +42,16 @@ def split_data(data: str, strategy: str):
 
 
 def prepare_data_pack(graph: nx.Graph, strategies: list, data: str, data_dir: str):
-    """
-    Create the split dataset and save as dataset_strategy.pkl file
-    :param graph: the graph to load
-    :param strategies: temporarily 602020 or 051580 according to EGNN paper
-    :param data: the dataset to be split
-    :param data_dir: the dataset dir
-    """
     node_id = list(graph.nodes)
     # read the nodes matrix X
     X = np.array(node_id)
-    # todo: get Y from LINC
     Y = np.array(nx.get_edge_attributes(graph, 'prob'))
     A = nx.adjacency_matrix(graph, node_id)
 
     with open(data_dir + "/" + data + ".pkl", 'wb') as f:
         pickle.dump((X, Y, A), f)
     node_id2idx = dict(zip(node_id, range(
-        len(node_id))))  # zip to a new dictionary {node: 'id'} to extract selected nodes and dataset splitting
+        len(node_id))))
     for splitting in strategies:
         id_train, id_val, id_test = split_data(data, splitting)
         idx_train = [node_id2idx[i] for i in id_train]
@@ -91,11 +66,6 @@ def save_graph_pickle(file, graph):
 
 
 def graph_generate(file_dir, node_num: int, m) -> nx.Graph:
-    """
-    node_num: number of nodes
-
-    :return: a random graph with node_num vertices and edge_num edges
-    """
     G = nx.barabasi_albert_graph(node_num, m)
     for i in range(len(list(G.nodes))):
         G.nodes[i]['label'] = -1
@@ -303,15 +273,6 @@ class QuerySampler(object):
         nodes_list = candidates[random.randint(0, len(candidates))]
         edge_list = nx.subgraph(self.graph, nodes_list).edges()
         sample = self.node_reorder(nodes_list, edge_list)
-        # nodes_list = []
-        # edges_list = []
-        # for vin range(0, node_num):
-        #     nodes_list.append((v, {"label": -1, "dvid": -1}))
-        #     for u in range(0, v):
-        #         edges_list.append((u, v, {"prob": self.graph.edges[u, v]["prob"]}))
-        # sample = nx.Graph()
-        # sample.add_nodes_from(nodes_list)
-        # sample.add_edges_from(edges_list)
         return sample
 
     def node_reorder(self, nodes_list, edges_list):
@@ -329,45 +290,3 @@ class QuerySampler(object):
         sample.add_edges_from(edges_list)
         return sample
 
-
-# id_train, id_val, id_test = split_data("collins.txt", "602020")
-# print(id_train)
-# print(id_val)
-# print(id_test)
-# g = graph_generate("./dataset/simulation/", 200, 2)
-# with open("dataset/simulation/s1_test.pkl", 'rb') as f:
-#     graph = pickle.load(f)
-#     # edge_list = nx.to_pandas_edgelist(graph)
-#     # edge_list.to_csv("dataset/simulation/s14linc.txt", sep=" ", header=None, index=False,float_format="%.2f")
-graph = load_data("krogan/krogan_core.txt")
-graph = to_LSS_format(graph, "krogan.txt")
-sampler = QuerySampler(graph)
-label_dict = {
-    # 'star_3': [189.195,892.7614],
-    # 'triangle_3': [1480.4263,18047.797],
-    # 'path_4': [49.1533 ,387.6763]
-    # 'star_4': [503.4912,15544.2638]
-    # 'tailedtriangle_4': [2957.2921,317676.3815],
-    # 'cycle_4': [3613.9587,561663.3236],
-    # 'clique_4': [10117.7296,2709.0683],
-    # 'clique_5': [7757.5298, 572602.3856],
-    'clique_6': [9423.2052,2707402.7495]
-}
-for key in label_dict.keys():
-    for i in range(100):
-        # sample = sampler.sample(key)
-        # query_dir = os.path.join("intel", "queryset", key)
-        # if not os.path.exists(query_dir):
-        #     os.mkdir(query_dir)
-        # with open(os.path.join(query_dir, "{}.txt".format(i)), 'w') as f1:
-        #     f1.write("t # {}\n".format(i))
-        #     for node in sample.nodes(data=True):
-        #         f1.write("v {} {} {}\n".format(node[0], node[1]["label"], node[1]['dvid']))
-        #     for edge in sample.edges(data=True):
-        #         f1.write("e {} {} {:.2f}\n".format(edge[0], edge[1], edge[2]['prob']))
-        label_dir = os.path.join("krogan", "label", key)
-        if not os.path.exists(label_dir):
-            os.mkdir(label_dir)
-        with open(os.path.join(label_dir, "{}.txt".format(i)), 'w') as f2:
-            f2.write(str(label_dict[key][0]) + " " + str(label_dict[key][1]))
-# prepare_data_pack(g, ["602020"], "s1", "dataset/simulation")

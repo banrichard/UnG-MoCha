@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from model.CountingNet import EdgeMean
+from model.CountingNet import Mocha
 from motif_processor import QueryPreProcessing, Queryset
 from utils.graph_operator import data_graph_transform
 
@@ -57,7 +57,7 @@ train_config = {
     "decay_patience": 20,
     "max_grad_norm": 8,
 
-    "model": "EDGEMEAN",  # CNN, RNN, TXL, RGCN, RGIN, RSIN
+    "model": "Mocha",
     "motif_net": "NNGINConcat",
     "graph_net": "GIN",
     "emb_dim": 128,
@@ -65,17 +65,13 @@ train_config = {
     "motif_hidden_dim": 128,
     "motif_num_layers": 3,
 
-    "predict_net": "CCANet",  # MeanPredictNet, SumPredictNet, MaxPredictNet,
-    # MeanAttnPredictNet, SumAttnPredictNet, MaxAttnPredictNet,
-    # MeanMemAttnPredictNet, SumMemAttnPredictNet, MaxMemAttnPredictNet,
-    # DIAMNet, CCANet
+    "predict_net": "CCANet",  # MeanPredictNet, DIAMNet, CCANet
     "predict_net_add_enc": False,
     "predict_net_add_degree": False,
-    "predict_net_hidden_dim": 128,
+    "predict_net_hidden_dim": 64,
     "predict_net_num_heads": 4,
     "mem_len": 1,
     "predict_net_mem_init": "mean",
-    # mean, sum, max, attn, circular_mean, circular_sum, circular_max, circular_attn, lstm
     "predict_net_recurrent_steps": 3,
 
     "edgemean_num_bases": 8,
@@ -99,7 +95,8 @@ train_config = {
     'init_g_dim': 1,
 
     "test_only": False,
-    "GSL": True
+    "GSL": True,
+    "visualize_only":False
 
 }
 
@@ -157,7 +154,7 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
         #     motif_x, motif_edge_index, motif_edge_attr = \
         #         _to_cuda(motif_x), _to_cuda(motif_edge_index), _to_cuda(motif_edge_attr)
         #     card, var = card.cuda(), var.cuda()
-        if config['predict_net'].startswith("Film") or config['predict_net'].startswith("CCA"):
+        if config['predict_net'].startswith("Film") or config['predict_net'].startswith("CCA") or config['predict_net'].startswith("Wasserstein"):
             pred, pred_var, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
             # distribution, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
             # pred_var += 1e-10
@@ -176,8 +173,8 @@ def train(model, optimizer, scheduler, data_type, data_loader, device, config, e
                 pred_var, var)
             # bp_loss = -distribution.log_prob(card).mean()
             # bp_loss = wasserstein_loss(torch.distributions.Normal(loc=card, scale=torch.sqrt(var)), distribution)
-        reg_loss = bp_loss if not config['predict_net'].startswith("Film") or config['predict_net'].startswith(
-            "CCA") else bp_loss - train_config[
+        reg_loss = bp_loss if not (config['predict_net'].startswith("Film") or config['predict_net'].startswith(
+            "CCA") or config['predict_net'].startswith("Wasserstein"))else bp_loss - train_config[
             "weight_decay_film"] * filmreg
 
         # if isinstance(config["bp_loss_slp"], (int, float)):
@@ -283,7 +280,7 @@ def evaluate(model, data_type, data_loader, config, graph, logger=None, writer=N
             var = var.cpu()
             evaluate_results["mean"]["count"].extend(card.view(-1).tolist())
             evaluate_results["var"]["var_t"].extend(var.view(-1).tolist())
-            if config['predict_net'].startswith("Film") or config['predict_net'].startswith("CCA"):
+            if config['predict_net'].startswith("Film") or config['predict_net'].startswith("CCA") or config['predict_net'].startswith("Wasserstein"):
                 st = time.time()
                 pred, pred_var, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
                 # distribution, filmreg = model(motif_x, motif_edge_index, motif_edge_attr, graph)
@@ -459,8 +456,8 @@ if __name__ == "__main__":
     # train_config.update({'init_g_dim': graph.x.size(1)})
     # construct the model
 
-    if train_config["model"] == "EDGEMEAN":
-        model = EdgeMean(train_config)
+    if train_config["model"] == "Mocha":
+        model = Mocha(train_config)
     # elif train_config["model"] == "EDGESUM":
     #     model = ESUM(train_config)
     # elif train_config["model"] == "EDGESUMS":
