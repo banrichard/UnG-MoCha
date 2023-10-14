@@ -123,24 +123,20 @@ class FilmSumPredictNet(BasePoolPredictNet):
     def forward(self, pattern, graph):
         p = self.drop(self.p_layer(pattern))
         g = self.drop(self.g_layer(graph))
-        # _p = p.expand(-1, g.size(1), -1)
 
         alpha = self.linear_alpha1(g) + self.linear_alpha2(p)
         beta = self.linear_beta1(g) + self.linear_beta2(p)
         g = (alpha + 1) * g + beta
-        # p = p.squeeze()
-        # g = torch.sum(g, dim=1)
+
         y = self.pred_layer1(
-            torch.cat([p, g, g - p, g * p], dim=1))  # W ^T * FCL(x ‖ y ‖ x − y ‖ x \dot y) + b.
-        y = self.act(y)  # relu
+            torch.cat([p, g, g - p, g * p], dim=1))
+        y = self.act(y)
         y = self.ln(y)
         y_var = y
         y = self.pred_mean(y)
         y = F.relu(y)
         var = self.pred_var(y_var)
         var = F.relu(var)
-        # distribution = torch.distributions.Normal(loc=y + self.epsilon, scale=torch.sqrt(var) + self.epsilon)
-        # return y
         filmreg = (torch.sum(alpha ** 2)) ** 0.5 + (torch.sum(beta ** 2)) ** 0.5
         return y, var, filmreg
 
@@ -212,13 +208,8 @@ class DIAMNet(nn.Module):
             nn.init.zeros_(layer.bias)
 
     def forward(self, pattern, graph):
-        bsz = 1
         pattern = pattern.unsqueeze(0)
         graph = graph.unsqueeze(0)
-        p_len, g_len = pattern.size(1), graph.size(1)
-        # p_mask = batch_convert_len_to_mask(pattern_len) if p_len == pattern_len.max() else None
-        # g_mask = batch_convert_len_to_mask(graph_len) if g_len == graph_len.max() else None
-        # pattern_len  = (n,1) 0: batch_size 1:number of nodes in the motif
         pattern_len = torch.tensor(pattern.size(0), dtype=torch.int32).view(-1, 1)
         graph_len = torch.tensor(graph.size(0), dtype=torch.int32).view(-1, 1)
         p_mask = batch_convert_len_to_mask(pattern_len).to(pattern.device)
@@ -303,7 +294,6 @@ def init_mem(x, x_mask=None, mem_len=1, mem_init="mean", **kw):
         elif mem_init.endswith("sum"):
             mem = F.avg_pool1d(x.transpose(1, 2), kernel_size=kernel_size, stride=stride).transpose(1, 2) * kernel_size
         elif mem_init.endswith("attn"):
-            # split and self attention
             mem = list()
             attn = kw.get("attn", None)
             hidden_dim = attn.query_dim
@@ -331,10 +321,10 @@ def init_mem(x, x_mask=None, mem_len=1, mem_init="mean", **kw):
                 mem.append(hx[0].view(1, -1))
             mem = torch.cat(mem, dim=1)
         if x_mask is not None:
-            # print(x_mask.size())
+
             mem_mask = F.max_pool1d(x_mask.float().unsqueeze(1), kernel_size=kernel_size, stride=stride).squeeze(
                 1).byte()
-            # mem_mask = F.max_pool1d(x_mask.float(), kernel_size=kernel_size, stride=stride).squeeze(1).byte()
+
         else:
             mem_mask = None
     if post_proj:
@@ -376,17 +366,15 @@ class GatedMultiHeadAttn(nn.Module):
         if post_lnorm:
             self.o_layer_norm = nn.LayerNorm(query_dim)
 
-        # init
         scale = 1 / (head_dim ** 0.5)
         for m in [self.q_net, self.k_net, self.v_net, self.o_net]:
             nn.init.normal_(m.weight, 0.0, scale)
-        # when new data comes, it prefers to output 1 so that the gate is 1
+
         nn.init.normal_(self.g_net.weight, 0.0, scale)
         nn.init.ones_(self.g_net.bias)
 
     def forward(self, query, key, value, attn_mask=None):
-        ##### multihead attention
-        # [bsz x head_len x num_heads x head_dim]
+
         bsz = query.size(0)
         if self.add_zero_attn:
             key = torch.cat([key,
@@ -400,25 +388,23 @@ class GatedMultiHeadAttn(nn.Module):
         qlen, klen, vlen = query.size(1), key.size(1), value.size(1)
 
         if self.pre_lnorm:
-            ##### layer normalization
+
             query = self.q_layer_norm(query)
             key = self.k_layer_norm(key)
             value = self.v_layer_norm(value)
 
-        # linear projection
         head_q = self.q_net(query).view(bsz, qlen, self.num_heads, self.hidden_dim // self.num_heads)
         head_k = self.k_net(key).view(bsz, klen, self.num_heads, self.hidden_dim // self.num_heads)
         head_v = self.v_net(value).view(bsz, vlen, self.num_heads, self.hidden_dim // self.num_heads)
 
-        # multi head attention
+
         attn_vec = get_multi_head_attn_vec(
             head_q=head_q, head_k=head_k, head_v=head_v,
             attn_mask=attn_mask, act_layer=self.act, dropatt=self.dropatt)
 
-        ##### linear projection
+
         attn_out = self.o_net(attn_vec)
 
-        ##### gate
         gate = F.sigmoid(self.g_net(torch.cat([query, attn_out], dim=2)))
         attn_out = gate * query + (1 - gate) * attn_out
 
@@ -462,14 +448,13 @@ class MultiHeadAttn(nn.Module):
         if post_lnorm:
             self.o_layer_norm = nn.LayerNorm(query_dim)
 
-        # init
+
         scale = 1 / (head_dim ** 0.5)
         for m in [self.q_net, self.k_net, self.v_net, self.o_net]:
             nn.init.normal_(m.weight, 0.0, scale)
 
     def forward(self, query, key, value, attn_mask=None):
-        ##### multihead attention
-        # [bsz x hlen x num_heads x head_dim]
+
         bsz = query.size(0)
 
         if self.add_zero_attn:
@@ -484,22 +469,21 @@ class MultiHeadAttn(nn.Module):
         qlen, klen, vlen = query.size(1), key.size(1), value.size(1)
 
         if self.pre_lnorm:
-            ##### layer normalization
+
             query = self.q_layer_norm(query)
             key = self.k_layer_norm(key)
             value = self.v_layer_norm(value)
 
-        # linear projection
+
         head_q = self.q_net(query).view(bsz, qlen, self.num_heads, self.hidden_dim // self.num_heads)
         head_k = self.k_net(key).view(bsz, klen, self.num_heads, self.hidden_dim // self.num_heads)
         head_v = self.v_net(value).view(bsz, vlen, self.num_heads, self.hidden_dim // self.num_heads)
 
-        # multi head attention
+
         attn_vec = get_multi_head_attn_vec(
             head_q=head_q, head_k=head_k, head_v=head_v,
             attn_mask=attn_mask, act_layer=self.act, dropatt=self.dropatt)
 
-        ##### linear projection
         attn_out = self.o_net(attn_vec)
 
         if self.post_lnorm:
@@ -511,13 +495,11 @@ class MultiHeadAttn(nn.Module):
 def get_multi_head_attn_vec(head_q, head_k, head_v, attn_mask=None, act_layer=None, dropatt=None):
     _INF = -1e30
     bsz, qlen, num_heads, head_dim = head_q.size()
-    # Q = [batch_size * qlen * num_heads * head_dim]
-    # K_T = [batch_size * klen * head_dim * num_heads]
+
     scale = 1 / (head_dim ** 0.5)
 
-    # [bsz x qlen x klen x num_heads]
     attn_score = torch.einsum("bind,bjnd->bijn", (head_q, head_k))
-    # attn_score = torch.matmul(head_q, head_k.T)
+
     attn_score.mul_(scale)
     if attn_mask is not None:
         if attn_mask.dim() == 2:
@@ -525,13 +507,11 @@ def get_multi_head_attn_vec(head_q, head_k, head_v, attn_mask=None, act_layer=No
         elif attn_mask.dim() == 3:
             attn_score.masked_fill_((attn_mask == 0).unsqueeze(-1), _INF)
 
-    # [bsz x qlen x klen x num_heads]
     if act_layer is not None:
         attn_score = act_layer(attn_score)
     if dropatt is not None:
         attn_score = dropatt(attn_score)
 
-    # [bsz x qlen x klen x num_heads] x [bsz x klen x num_heads x head_dim] -> [bsz x qlen x num_heads x head_dim]
     attn_vec = torch.einsum("bijn,bjnd->bind", (attn_score, head_v))
     attn_vec = attn_vec.contiguous().view(bsz, qlen, -1)
     return attn_vec
@@ -583,13 +563,8 @@ class MeanAttnPredictNet(BaseAttnPredictNet):
                                                  dropout, dropatt)
 
     def forward(self, pattern, graph):
-        bsz = 1
         pattern = pattern.unsqueeze(0)
         graph = graph.unsqueeze(0)
-        p_len, g_len = pattern.size(1), graph.size(1)
-        # p_mask = batch_convert_len_to_mask(pattern_len) if p_len == pattern_len.max() else None
-        # g_mask = batch_convert_len_to_mask(graph_len) if g_len == graph_len.max() else None
-        # pattern_len  = (n,1) 0: batch_size 1:number of nodes in the motif
         pattern_len = torch.tensor(pattern.size(0), dtype=torch.int32).view(-1, 1)
         graph_len = torch.tensor(graph.size(0), dtype=torch.int32).view(-1, 1)
         p_mask = batch_convert_len_to_mask(pattern_len).to(pattern.device)
