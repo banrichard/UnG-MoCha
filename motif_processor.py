@@ -4,16 +4,16 @@ import pickle
 import random
 
 import networkx as nx
-
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from torch_geometric.data import Data
-
+from torch_geometric.loader import DataLoader
+from torch_geometric.utils import from_networkx
 from utils.graph_operator import load_graph
 
 
 class QueryPreProcessing(object):
-    def __init__(self, queryset_dir: str, true_card_dir: str, dataset: str, data_dir = "dataset"):
+    def __init__(self, queryset_dir: str, true_card_dir: str, dataset: str, data_dir="dataset"):
         """
 		load the query graphs, true counts, vars
 		"""
@@ -43,7 +43,6 @@ class QueryPreProcessing(object):
                     continue
                 # load the query
                 query = self.load_query(query_load_path)
-                # avg_label_den += label_den
                 true_card, true_var = self.load_card(card_load_path)
                 if true_card >= self.upper_card or true_card < self.lower_card:
                     continue
@@ -83,11 +82,7 @@ class QueryPreProcessing(object):
         query = nx.Graph()
         query.add_nodes_from(nodes_list)
         query.add_edges_from(edges_list)
-
-        # print('number of nodes: {}'.format(graph.number_of_nodes()))
-        # print('number of edges: {}'.format(graph.number_of_edges()))
         file.close()
-        # label_den = float(label_cnt) / query.number_of_nodes()
         return query
 
     def load_card(self, card_load_path):
@@ -134,7 +129,7 @@ class Queryset(object):
         self.edge_embed_feat = None
         self.edge_embed_dim = 0
         # self.num_edge_feat = len(self.edge_label_card)
-        self.all_subsets = self.transform_motif_to_tensors(all_queries)
+        self.all_subsets = self.transform_motif_to_tensors(all_queries)  # [Data(),mean,var]
         self.batch_size = batch_size
 
         self.num_train_queries, self.num_val_queries, self.num_test_queries = 0, 0, 0
@@ -147,22 +142,21 @@ class Queryset(object):
 
     def transform_motif_to_tensors(self, all_queries):
         tmp_subsets = []
-
         for (motif, card, var) in all_queries:
-            decomp_x, decomp_edge_index, decomp_edge_weight = self._get_motif_data(motif)
-            tmp_subsets.append([decomp_x, decomp_edge_index, decomp_edge_weight, card, var])
+            pyg_motif = self._get_motif_data(motif)
+            tmp_subsets.append([pyg_motif, card, var])
             self.num_queries += 1
 
         return tmp_subsets
 
     def _get_motif_data(self, motif):
-        x = []
-        edge_index = None
-        edge_attr = None
         node_attr = self._get_node_attr(motif)
-        edge_index, edge_attr = self._get_edge_attr(motif)
-        x = node_attr
-        return x, edge_index, edge_attr
+        pyg_motif = from_networkx(motif)
+        pyg_motif.x = node_attr
+        pyg_motif.edge_attr = pyg_motif.edge_labels
+        del pyg_motif.edge_labels
+        del pyg_motif.labels
+        return pyg_motif
 
     def _get_node_attr(self, motif):
         node_attr = torch.zeros(size=(motif.number_of_nodes(), 1), dtype=torch.float)
@@ -255,13 +249,13 @@ class Queryset(object):
         self.num_test_queries += len(test_sets[-1])
         return train_sets, val_sets, test_sets
 
-    def to_dataloader(self, all_sets, batch_size=1, shuffle=True):
+    def to_dataloader(self, all_sets, batch_size=16, shuffle=True):
         # datasets = [QueryDataset(queries=queries)
         #             for queries in all_sets]
         dataset = QueryDataset(queries=all_sets)
         # dataloaders = [DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
         #                for dataset in datasets]
-        dataloaders = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
+        dataloaders = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate)
         return dataloaders
 
 
@@ -280,11 +274,11 @@ class QueryDataset(Dataset):
         """
         decomp_x, decomp_edge_attr, decomp_edge_attr: list[Tensor]
         """
-        x, edge_index, edge_attr, card, var = self.queries[index]
+        motif, card, var = self.queries[index]
         card = torch.tensor(math.log2(card), dtype=torch.float)
         var = torch.tensor(math.log2(var), dtype=torch.float)
 
-        return x, edge_index, edge_attr, card, var
+        return motif, card, var
 
 
 def _to_datasets(all_sets):
@@ -346,7 +340,7 @@ def _to_dataloaders(dataset, batch_size=1, shuffle=True):
     """
     create a lists of torch dataloader from datasets
     """
-    dataloaders = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate)
+    dataloaders = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle)
     return dataloaders
 
 
@@ -358,7 +352,7 @@ if __name__ == "__main__":
     all_subsets = QD.all_queries
 
     QS = Queryset(dataset_name="krogan_core.txt", data_dir="dataset",
-                  dataset="krogan", all_queries=all_subsets)
+                  dataset="krogan", all_queries=all_subsets,batch_size=16)
     train_loaders = QS.train_loaders
     for i, batch in enumerate(train_loaders):
         print(batch)

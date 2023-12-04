@@ -480,7 +480,7 @@ def k_hop_induced_subgraph_edge(graph, edge, k=1) -> nx.Graph:
     subgraph = nx.subgraph(graph, node_list).copy()
     remove_edge_list = [edge for edge in subgraph.edges(data=True) if edge not in edge_list]
     subgraph.remove_edges_from(remove_edge_list)
-    visualization(subgraph, "original")
+    # visualization(subgraph, "original")
     return subgraph
 
 
