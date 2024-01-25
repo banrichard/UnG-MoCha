@@ -47,7 +47,7 @@ python train.py --graph_net GINE --motif_net NNGINConcat --predict_net CCANet --
 ```
 Running parallel train (We recommend to use 4 A100 NVLink or better (H100) GPUs to achieve the best performance.)
 ```
- torchrun --standalone --nnodes=1 --nproc_per_node=4 ./parallel_train.py --dataset krogan --dataset_name krogan_core.txt --graph_net GraphSage
+ torchrun --standalone --nnodes=1 --nproc_per_node=4 ./para_train.py --dataset krogan --dataset_name krogan_core.txt --graph_net GraphSage
 
 ```
 
