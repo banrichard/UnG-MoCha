@@ -45,6 +45,12 @@ python train.py --graph_net GINE --motif_net NNGINConcat --predict_net CCANet --
     --true_card_dir label --dataset krogan --data_dir dataset --dataset_name krogan_core.txt --save_res_dir result \
     --save_model_dir saved_model --visualization_only True
 ```
+Running parallel train (We recommend to use 4 A100 NVLink or better (H100) GPUs to achieve the best performance.)
+```
+ torchrun --standalone --nnodes=1 --nproc_per_node=4 ./parallel_train.py --dataset krogan --dataset_name krogan_core.txt --graph_net GraphSage
+
+```
+
 
 ### Key Parameters
 All the parameters with their default value are in active_train.py
