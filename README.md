@@ -31,7 +31,7 @@ Model Evaluation
 ```
 python train.py --test_only True
 ```
-Running random based UnG-MoCha
+Running UnG-MoCha without USSL
 ```
 python train.py --graph_net GINE --motif_net NNGINConcat --predict_net CCANet --queryset_dir queryset \
     --epochs 200 --batch_size 16 --lr 0.0006 --weight_decay 0.0005 --weight_decay_var  0.1 --decay_factor 0.7\
