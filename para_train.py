@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data.distributed import DistributedSampler
 from torch_geometric.loader import DataLoader
 
-from model.CountingNet import EdgeMean
+from model.CountingNet import Mocha
 from motif_processor import QueryPreProcessing, Queryset
 from utils.graph_operator import data_graph_transform
 
@@ -53,7 +53,7 @@ train_config = {
     "decay_factor": 0.7,
     "decay_patience": 20,
     "max_grad_norm": 8,
-    "model": "EDGEMEAN",
+    "model": "Mocha",
     "motif_net": "NNGINConcat",
     "graph_net": "GIN",
     "emb_dim": 64,
@@ -540,7 +540,7 @@ if __name__ == "__main__":
         extraction=train_config["sub_ext"],
         hop=train_config["hop"]
     )
-    model = EdgeMean(train_config)
+    model = Mocha(train_config)
     if local_rank == 0:
         logger.info(model)
         # debug the non-gradient layer
